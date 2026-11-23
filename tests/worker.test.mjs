@@ -130,7 +130,7 @@ test('admission and global upstream budgets are enforced before provider calls',
   assert.ok(Number(exhausted.headers.get('Retry-After')) > 0);
   assert.equal((await h.request('/api/prices/base1-5')).status, 429);
   assert.equal(h.calls(), 1);
-  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS count FROM price_cards').get().count, 3);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS count FROM price_cards').get().count, 1);
 });
 
 test('scheduler only refreshes bounded due, recently requested public cards', async t => {
@@ -367,4 +367,15 @@ test('health exposes only a validated deployment commit', async t => {
   assert.equal((await (await h.request('/api/health')).json()).deployCommit, 'ab'.repeat(20));
   h.env.DEPLOY_COMMIT = 'secret-or-untrusted-environment-value';
   assert.equal((await (await h.request('/api/health')).json()).deployCommit, null);
+});
+
+test('exhausted admission allowance rejects distinct IDs without further database writes', async t => {
+  const h = harness(t, { env: { MAX_UPSTREAM_REQUESTS_PER_DAY: '8' }, provider: async () => new Response(null, {status:404}) });
+  assert.equal((await h.request('/api/prices/missing-one')).status,404);
+  assert.equal((await h.request('/api/prices/missing-two')).status,404);
+  const before=h.sqlite.prepare('SELECT total_changes() AS n').get().n;
+  for(let i=0;i<100;i++)assert.equal((await h.request('/api/prices/exhausted-'+i)).status,429);
+  assert.equal(h.sqlite.prepare('SELECT total_changes() AS n').get().n,before);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards').get().n,2);
+  assert.equal(h.calls(),2);
 });

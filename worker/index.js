@@ -292,6 +292,20 @@ export async function handleRequest(request, env, context = {}, dependencies = {
     const bundle = await currentPrice(db, id, env, dependencies.fetch || fetch, now, async () => {
       const limited = await checkRateLimit(request, env, 'PRICE_ADMISSION_RATE_LIMITER');
       if (limited) throw new PublicError((await limited.json()).error, limited.status, 60);
+      // A read-only preflight prevents fresh IDs from churning provisional rows
+      // after either daily allowance is gone. refreshCard still atomically
+      // acquires both budgets, so concurrent admissions cannot bypass the caps.
+      const budget = await db.prepare(`SELECT
+        (SELECT calls FROM price_admission_budget WHERE day=?1) AS admissions,
+        (SELECT calls FROM upstream_budget WHERE day=?1) AS total`).bind(iso(now).slice(0,10)).first();
+      const limits = config(env);
+      if ((budget?.admissions || 0) >= limits.admissions || (budget?.total || 0) >= limits.daily) {
+        const tomorrow = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate()+1);
+        const message = (budget?.total || 0) >= limits.daily
+          ? 'The daily shared price refresh budget is exhausted. Saved prices remain available.'
+          : 'The daily new-card lookup allowance is exhausted. Saved prices can still refresh.';
+        throw new PublicError(message,429,Math.max(1,Math.ceil((tomorrow-now)/1000)));
+      }
     });
     return json(bundle, 200, { 'Cache-Control': bundle.lastError ? 'no-store' : 'public, max-age=300' });
   } catch (error) {
