@@ -55,6 +55,22 @@ async function availablePort() {
   return port;
 }
 
+function requireStaticSecurity(response, path) {
+  const directives = new Set((response.headers.get('content-security-policy') || '').split(';').map(value => value.trim()));
+  for (const directive of [
+    "default-src 'none'", "script-src 'self'", "script-src-attr 'none'",
+    "style-src 'self' https://fonts.googleapis.com", "style-src-attr 'unsafe-inline'",
+    'font-src https://fonts.gstatic.com', "img-src 'self' https:",
+    "connect-src 'self' https://api.tcgdex.net", "worker-src 'self'",
+    "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'", "object-src 'none'",
+  ]) assert.ok(directives.has(directive), `${path} is missing CSP directive ${directive}`);
+  for (const [header, value] of [
+    ['x-frame-options', 'DENY'], ['x-content-type-options', 'nosniff'],
+    ['referrer-policy', 'no-referrer'],
+    ['permissions-policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()'],
+  ]) assert.equal(response.headers.get(header), value, `${path} must serve ${header}`);
+}
+
 try {
   // An isolated empty database proves that every committed migration is present.
   // Nothing reads or modifies the developer's .wrangler database.
@@ -81,14 +97,16 @@ try {
 
   const page = await request('/');
   assert.equal(page.status, 200);
+  requireStaticSecurity(page, '/');
   assert.match(page.headers.get('content-type'), /text\/html/);
   assert.match(await page.text(), /<title>Monstertrade/);
   for (const [path, type] of [
-    ['/app.js', /javascript/], ['/styles.css', /text\/css/],
+    ['/app.js', /javascript/], ['/import-worker.js', /javascript/], ['/styles.css', /text\/css/],
     ['/assets/monstertrade-logo.jpg', /image\/jpeg/], ['/featured.json', /application\/json/],
   ]) {
     const response = await request(path);
     assert.equal(response.status, 200, `${path} is missing from the static bundle`);
+    requireStaticSecurity(response, path);
     assert.match(response.headers.get('content-type'), type, `${path} has the wrong MIME type`);
     assert.ok((await response.arrayBuffer()).byteLength > 0, `${path} is empty`);
   }
@@ -100,7 +118,8 @@ try {
   assert.equal((await request('/api/unknown')).status, 404);
   assert.equal((await request('/api/health', { method: 'POST' })).status, 405);
   assert.equal((await request('/missing-static-asset.js')).status, 404, 'Missing assets must not return the app shell');
-  console.log('Smoke checks passed: fresh D1 migrations, card/sealed health and history, static assets, and API boundaries.');
+  assert.equal((await request('/_headers')).status, 404, 'Cloudflare header metadata must not be published as an asset');
+  console.log('Smoke checks passed: fresh D1 migrations, card/sealed health and history, static asset security headers, and API boundaries.');
 } catch (error) {
   console.error(output);
   console.error(`Smoke check failed: ${error.message}`);
