@@ -1,0 +1,44 @@
+name: Trusted Git Flow policy
+
+# This workflow and its scripts must reach protected main before this gate is active.
+# Never check out or execute the PR's source in this privileged metadata workflow.
+on:
+  pull_request_target:
+    branches: [main, develop, 'release/**', 'hotfix/**']
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+  # Publish a commit status, which an unprivileged fork's same-name job cannot replace.
+  statuses: write
+
+concurrency:
+  group: trusted-git-flow-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Trusted policy publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require an immutable reviewed policy revision
+        env:
+          POLICY_SHA: ${{ vars.GIT_FLOW_POLICY_SHA }}
+        run: |
+          [[ "$POLICY_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Set GIT_FLOW_POLICY_SHA to the reviewed policy commit.'; exit 1; }
+      - name: Check out reviewed policy only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ vars.GIT_FLOW_POLICY_SHA }}
+          persist-credentials: false
+      - name: Set up the policy runtime without dependency caching
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Validate PR metadata and publish the required status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-git-flow-policy.mjs

@@ -76,8 +76,9 @@ Staging has its own Worker, price cache, history, and schedule. Both environment
 | Workflow | Trigger | Result |
 | --- | --- | --- |
 | **CI / Checks** | Pull requests and pushes to `main`, `develop`, `release/**`, and `hotfix/**` | Validates source/configuration/assets, runs tests and an isolated local Worker smoke test, and checks both deployment bundles without cloud credentials. |
-| **CI / Git Flow** | The same CI events | On PRs, checks branch routing, Conventional Commit titles and subjects, ancestry, and production release versions. |
-| **Deploy to Cloudflare** | Successful push CI for `main` or `develop`, or a matching manual run | Verifies the latest branch revision, migrates its D1 database, publishes its Worker, and checks health. Automatic runs require the corresponding enable flag. Successful production releases receive an immutable version tag. |
+| **CI / Git Flow** | The same CI events | Legacy PR feedback during rollout; checks branch routing, commit conventions, ancestry, and release versions. |
+| **Trusted Git Flow policy** | PR metadata events, after activation on `main` | Publishes a separate required `Git Flow` commit status from the reviewed immutable policy revision, without executing PR code. |
+| **Deploy to Cloudflare** | Successful push CI for `main` or `develop`, or a matching manual run | Independently revalidates the latest merged PR from pinned policy, migrates its D1 database, publishes its Worker, and checks health. Automatic runs require the corresponding enable flag. Successful production releases receive an immutable version tag. |
 
 Configure these under **Settings → Secrets and variables → Actions** in GitHub. The official [Cloudflare CI authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/#1-authentication) explains account-scoped tokens, and [GitHub's repository-secret guide](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#creating-secrets-for-a-repository) shows where to save them.
 
@@ -85,6 +86,7 @@ Configure these under **Settings → Secrets and variables → Actions** in GitH
 | --- | --- | --- |
 | Repository secret | `CLOUDFLARE_API_TOKEN` | A Cloudflare token scoped to the target account with Workers deployment permissions and **Account → D1 → Edit** for migrations. See [D1 token permissions](https://developers.cloudflare.com/d1/tutorials/import-to-d1-with-rest-api/#1-create-a-d1-api-token). |
 | Repository secret | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing the Worker and database. |
+| Repository variable | `GIT_FLOW_POLICY_SHA` | Full SHA of the reviewed policy commit; required by trusted PR and independent pre-deployment checks. Follow [activation](docs/GIT_FLOW.md#trusted-policy-and-activation) before changing this pin. |
 | Repository variable | `CLOUDFLARE_DATABASE_ID` | The UUID of the existing `monsterstrade-prices` D1 database. |
 | Repository variable | `CLOUDFLARE_STAGING_DATABASE_ID` | The UUID of the separate `monsterstrade-prices-staging` D1 database. Must differ from production. |
 | Repository variable | `CLOUDFLARE_DEPLOY_ENABLED` | Set to `true` when automatic production deployment after successful CI is wanted. Leave absent until setup is complete. |

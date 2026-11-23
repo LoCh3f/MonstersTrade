@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   git-flow:
+    # Keep the legacy check during rollout. Once main contains the trusted policy,
+    # the same-name commit status is required as well and cannot be replaced by this job.
     name: Git Flow
     runs-on: ubuntu-latest
     timeout-minutes: 5

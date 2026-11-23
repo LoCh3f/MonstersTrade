@@ -23,8 +23,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: ${{ (github.event.workflow_run.head_branch || github.ref_name) == 'develop' && 'Staging' || 'Production' }}
+  policy:
+    name: Independent deployment policy
     if: >-
       (github.event_name == 'workflow_dispatch' &&
        ((github.ref == 'refs/heads/main' && inputs.target == 'production') ||
@@ -35,6 +35,38 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository &&
        ((github.event.workflow_run.head_branch == 'main' && vars.CLOUDFLARE_DEPLOY_ENABLED == 'true') ||
         (github.event.workflow_run.head_branch == 'develop' && vars.CLOUDFLARE_STAGING_DEPLOY_ENABLED == 'true')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      DEPLOY_TARGET: ${{ (github.event.workflow_run.head_branch || github.ref_name) == 'develop' && 'staging' || 'production' }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - name: Require an immutable reviewed policy revision
+        env:
+          POLICY_SHA: ${{ vars.GIT_FLOW_POLICY_SHA }}
+        run: |
+          [[ "$POLICY_SHA" =~ ^[a-f0-9]{40}$ ]] || { echo 'Set GIT_FLOW_POLICY_SHA to the reviewed policy commit.'; exit 1; }
+      - name: Check out reviewed policy, never the deployment candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ vars.GIT_FLOW_POLICY_SHA }}
+          persist-credentials: false
+      - name: Set up the policy runtime without dependency caching
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Independently verify the accepted PR before any cloud credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-deployment-policy.mjs
+
+  deploy:
+    name: ${{ (github.event.workflow_run.head_branch || github.ref_name) == 'develop' && 'Staging' || 'Production' }}
+    needs: policy
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
