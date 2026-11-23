@@ -25,5 +25,30 @@
     "MAX_TRACKED_CARDS": "500",
     "MAX_UPSTREAM_REQUESTS_PER_DAY": "1000",
     "REFRESH_BATCH_SIZE": "2"
+  },
+  "env": {
+    "staging": {
+      "name": "monstertrade-staging",
+      "assets": {
+        "directory": "./dist",
+        "binding": "ASSETS",
+        "run_worker_first": ["/api/*"],
+        "not_found_handling": "none"
+      },
+      "d1_databases": [
+        {
+          "binding": "PRICES_DB",
+          "database_name": "monsterstrade-prices-staging",
+          "database_id": "00000000-0000-0000-0000-000000000000",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "triggers": { "crons": ["*/5 * * * *"] },
+      "vars": {
+        "MAX_TRACKED_CARDS": "50",
+        "MAX_UPSTREAM_REQUESTS_PER_DAY": "100",
+        "REFRESH_BATCH_SIZE": "1"
+      }
+    }
   }
 }

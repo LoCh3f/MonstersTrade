@@ -11,17 +11,27 @@ const require = createRequire(import.meta.url);
 const wrangler = join(dirname(require.resolve('wrangler/package.json')), 'bin/wrangler.js');
 
 export function deploymentPlan(raw, env = {}, args = [], directory = root) {
-  if (args.some(value => !['--dry-run', '--migrate'].includes(value))) {
-    throw new Error('Supported deployment options: --dry-run and --migrate. Configure the Worker in wrangler.jsonc.');
+  if (args.some(value => !['--dry-run', '--migrate', '--staging'].includes(value))) {
+    throw new Error('Supported deployment options: --dry-run, --migrate and --staging. Configure the Worker in wrangler.jsonc.');
   }
-  const config = structuredClone(raw);
+  const staging = args.includes('--staging');
+  if (staging && !raw.env?.staging) throw new Error('Configure an explicit staging environment in wrangler.jsonc.');
+  // Staging declares its own bindings, variables and schedule; never inherit production data.
+  const config = structuredClone(staging ? { ...raw, ...raw.env.staging } : raw);
+  delete config.env;
   const bindings = (config.d1_databases || []).filter(database => database.binding === 'PRICES_DB');
-  const id = env.CLOUDFLARE_DATABASE_ID || bindings[0]?.database_id;
+  const id = (staging ? env.CLOUDFLARE_STAGING_DATABASE_ID : env.CLOUDFLARE_DATABASE_ID) || bindings[0]?.database_id;
   if (bindings.length !== 1 || typeof id !== 'string' || !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(id) || id === '00000000-0000-0000-0000-000000000000') {
-    throw new Error('Configure a real PRICES_DB database ID in wrangler.jsonc or CLOUDFLARE_DATABASE_ID. Run npm run db:create once after Cloudflare login. The zero UUID is only for local development.');
+    throw new Error(`Configure a real PRICES_DB database ID in wrangler.jsonc or ${staging ? 'CLOUDFLARE_STAGING_DATABASE_ID' : 'CLOUDFLARE_DATABASE_ID'}. The zero UUID is only for local development.`);
   }
   if (env.CLOUDFLARE_ACCOUNT_ID && !/^[a-f\d]{32}$/i.test(env.CLOUDFLARE_ACCOUNT_ID)) throw new Error('CLOUDFLARE_ACCOUNT_ID must be the 32-character Cloudflare account ID.');
-  if (config.name !== 'monstertrade' || typeof config.main !== 'string' || !config.assets?.directory) throw new Error('Expected the Monstertrade Worker and static assets in wrangler.jsonc.');
+  if (staging) {
+    const productionId = env.CLOUDFLARE_DATABASE_ID || raw.d1_databases?.find(database => database.binding === 'PRICES_DB')?.database_id;
+    if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(productionId || '') || productionId === '00000000-0000-0000-0000-000000000000') throw new Error('Supply the production database ID as well, so staging isolation can be verified.');
+    if (productionId.toLowerCase() === id.toLowerCase()) throw new Error('Staging must use a different database from production.');
+    if (!raw.env.staging.d1_databases || !raw.env.staging.vars || !raw.env.staging.triggers || !raw.env.staging.assets) throw new Error('Staging must declare its own database, variables, schedule and assets.');
+  }
+  if (config.name !== (staging ? 'monstertrade-staging' : 'monstertrade') || typeof config.main !== 'string' || !config.assets?.directory) throw new Error('Expected the selected Monstertrade Worker and static assets in wrangler.jsonc.');
   bindings[0].database_id = id;
   if (env.CLOUDFLARE_ACCOUNT_ID) config.account_id = env.CLOUDFLARE_ACCOUNT_ID;
   // Resolve source paths for the temporary config without editing local settings.

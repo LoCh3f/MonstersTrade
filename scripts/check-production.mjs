@@ -26,6 +26,6 @@ export async function checkProduction(url, { fetchImpl = fetch, wait = delay } =
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   try {
     await checkProduction(process.env.MONSTERTRADE_URL);
-    console.log('Production card and sealed price databases are healthy.');
-  } catch (error) { console.error(`Production check failed: ${error.message}`); process.exitCode = 1; }
+    console.log('Deployed card and sealed price databases are healthy.');
+  } catch (error) { console.error(`Deployment health check failed: ${error.message}`); process.exitCode = 1; }
 }
