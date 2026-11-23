@@ -13,7 +13,7 @@ const csv=(rows=[raw()])=>HEADER+'\n'+rows.map(row=>HEADER.split(',').map(key=>/
 
 function harness(t, provider) {
   const sqlite=new DatabaseSync(':memory:');
-  for(const file of ['0001_public_prices.sql','0002_active_price_catalogue.sql','0003_sealed_prices.sql']) sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['0001_public_prices.sql','0002_active_price_catalogue.sql','0003_sealed_prices.sql','0004_price_admission.sql']) sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
   t.after(()=>sqlite.close());
   const db={prepare(sql){const params=[];return{bind(...values){params.push(...values);return this;},async first(){return sqlite.prepare(sql).get(...params)||null;},async all(){return{results:sqlite.prepare(sql).all(...params)};},async run(){return{meta:{changes:Number(sqlite.prepare(sql).run(...params).changes)}};}};},async batch(statements){sqlite.exec('BEGIN');try{const results=[];for(const statement of statements)results.push(await statement.run());sqlite.exec('COMMIT');return results;}catch(error){sqlite.exec('ROLLBACK');throw error;}}};
   let now=START,calls=0,upstream=provider||(()=>new Response(csv()));
