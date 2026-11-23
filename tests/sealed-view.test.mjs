@@ -22,10 +22,20 @@ test('sealed forms keep canonical identity fixed and editable private valuation 
 test('sealed UI escapes editable text and suppresses unsafe evidence links', () => {
   const payload = '<img src=x onerror=alert(1)>';
   const html = sealedFields({ ...entry, name: payload, edition: '\" onfocus="alert(1)', manualValuation: { amount: 0, note: '</textarea><script>alert(1)</script>', updatedAt: '2026-11-23' } }, [{ id: 'main', name: payload }]);
-  assert.doesNotMatch(html, /<img|<script|<\/textarea><script/); assert.match(html, /&lt;img/);
+  assert.ok(html.includes('value="&lt;img src=x onerror=alert(1)&gt;"'));
+  assert.ok(html.includes('&lt;/textarea&gt;&lt;script&gt;alert(1)&lt;/script&gt;</textarea>'));
+  assert.ok(html.includes('value="&quot; onfocus=&quot;alert(1)"'));
+  assert.equal(html.includes(payload), false);
   const history = sealedValuationHistory({ valuationHistory: [{ amount: 0, updatedAt: '2026-11-23', note: payload, url: 'javascript:alert(1)' }] });
   assert.doesNotMatch(history, /javascript:|<img/); assert.match(history, /€0\.00/);
   assert.doesNotMatch(sealedPricePanel({ ...entry, productUrl: 'https://user:secret@example.com', market: { ...quote, lastError: payload } }), /href="https:\/\/user|<img/);
+});
+
+test('sealed text encoding preserves mixed-case markup and entities as literal text', () => {
+  const note = '</TeXtArEa><SvG/onload=alert(1)>&quot;';
+  const html = sealedFields({ ...entry, manualValuation: { amount: 0, updatedAt: '2026-11-23', note } });
+  assert.ok(html.includes('&lt;/TeXtArEa&gt;&lt;SvG/onload=alert(1)&gt;&amp;quot;</textarea>'));
+  assert.equal(html.includes(note), false);
 });
 
 test('retail panel explains currency, asking-price basis and unknown printing language', () => {
