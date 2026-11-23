@@ -4,6 +4,13 @@
   "main": "worker/index.js",
   "compatibility_date": "2026-11-23",
   "workers_dev": true,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "head_sampling_rate": 0.1, "invocation_logs": false },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
@@ -29,6 +36,7 @@
   "env": {
     "staging": {
       "name": "monstertrade-staging",
+      "preview_urls": false,
       "assets": {
         "directory": "./dist",
         "binding": "ASSETS",
