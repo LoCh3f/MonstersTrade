@@ -245,10 +245,8 @@ export async function handleRequest(request, env, context = {}, dependencies = {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/')) return env.ASSETS ? env.ASSETS.fetch(request) : new Response('Not found', { status: 404 });
   if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Only public read requests are supported.' }, 405, { Allow: 'GET, HEAD' });
-  if (url.pathname !== '/api/health') {
-    const limited = await checkRateLimit(request, env);
-    if (limited) return limited;
-  }
+  const limited = await checkRateLimit(request, env);
+  if (limited) return limited;
   if (url.pathname === '/api/sealed' || url.pathname.startsWith('/api/sealed/')) return handleSealedRequest(request, env, dependencies);
   if (url.pathname === '/api/health') {
     const info = { configured: false, service: 'public-prices', retentionDays: RETENTION_DAYS, scope: 'public quotes only', deployCommit: deployCommit(env) };
@@ -262,7 +260,7 @@ export async function handleRequest(request, env, context = {}, dependencies = {
         (SELECT day FROM price_admission_budget LIMIT 1) AS admission_ready`).first();
       let sealedConfigured = false;
       try {
-        await env.PRICES_DB.prepare(`SELECT (SELECT id FROM sealed_feed LIMIT 1), (SELECT product_id FROM sealed_products LIMIT 1), (SELECT product_id FROM sealed_history LIMIT 1)`).first();
+        await env.PRICES_DB.prepare(`SELECT (SELECT id FROM sealed_feed LIMIT 1), (SELECT product_id FROM sealed_products LIMIT 1), (SELECT product_id FROM sealed_history LIMIT 1), (SELECT id FROM sealed_catalogue LIMIT 1)`).first();
         sealedConfigured = true;
       } catch {}
       return json({ ...info, configured: true, sealedConfigured });
