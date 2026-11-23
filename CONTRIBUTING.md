@@ -17,11 +17,14 @@ npm run check
 npm test
 npm run test:smoke
 npm run check:deploy
+npm run check:deploy:staging
 ```
 
 The smoke test uses an isolated local database. These commands need no Cloudflare credentials and do not publish the app. For interface changes, also check the relevant desktop and mobile flows in a browser. The test suite does not replace visual testing.
 
-Create a short-lived branch from `main`, make a focused change, and open a pull request explaining the resulting behavior and validation. Keep the lockfile when changing dependencies. GitHub Actions runs the `CI` workflow with the `Checks` job for pull requests and pushes to `main`.
+Create normal working branches from `develop` and target `develop` in pull requests. Use a supported prefix such as `feature/`, `fix/`, `docs/`, or `ci/`; [Git Flow](docs/GIT_FLOW.md) lists all routes and release commands. Keep the lockfile when changing dependencies. CI requires both `Checks` and `Git Flow` for pull requests and protected branch updates.
+
+Use Conventional Commits, for example `fix(prices): retain the previous quote after a failed refresh`. Each commit should contain one coherent, meaningful change. Split unrelated work, but keep changes that depend on each other together. PR titles and every newly introduced commit subject must follow the same convention. Use merge commits to preserve this history; squash and rebase merging are disabled.
 
 ## Data and deployment changes
 
@@ -32,13 +35,17 @@ Create a short-lived branch from `main`, make a focused change, and open a pull 
 - Keep source dates, missing values, and provider errors explicit. Do not synthesize prices or infer a product variant from an unreviewed mapping.
 - Keep credentials, local database files, personal exports, and assistant metadata out of Git. `.gitignore` covers local `.env*`, `.dev.vars*`, `.wrangler/`, `.openai/`, `.codex*` directories, and preview evidence.
 
-Production deployment is configured separately from CI; see [README.md](README.md#github-actions-and-production-setup). A passing dry run alone does not prove that a remote database or scheduled invocation is healthy.
+Staging and production deployments are configured separately from CI; see [README.md](README.md#github-actions-and-production-setup). Staging uses a separate public Worker and D1 database, with shared account credentials. A passing dry run alone does not prove that a remote database or scheduled invocation is healthy.
 
 ## Repository settings
 
-Use `main` as the default branch, squash merges, and automatic deletion of merged branches. Where the repository plan supports branch protection or rulesets, require pull requests, the `Checks` status, resolved conversations, and an up-to-date branch; block branch deletion and force pushes. A sole maintainer should not require an approval that nobody else can provide. Add reviewer requirements when a reviewer is available.
+Keep `main` as the default branch. Allow merge commits only, using the PR title as the merge commit title. Disable automatic branch deletion: retain release/hotfix branches until `main` has been merged back into `develop`, then remove completed short-lived branches. Never delete `main` or `develop`.
 
-Workflow files do not enable these settings by themselves. Confirm the rules in GitHub's repository settings. Keep Actions' default token permission read-only and restrict production deployments to `main`. Dependabot checks npm and GitHub Actions weekly; review and merge its pull requests through the same checks.
+Protect both `main` and `develop` with required pull requests, `Checks` and `Git Flow`, an up-to-date branch, resolved conversations, and no bypass, force pushes, or deletion. Do not require linear history: Git Flow needs merge ancestry. A sole maintainer need not require an approval that nobody else can provide; add reviewer requirements when a reviewer is available.
+
+Workflow files do not enable these settings by themselves. Confirm the rules in GitHub's repository settings. Keep Actions' default token permission read-only. Production accepts only `main`; staging accepts only `develop`. The separate production tagging job alone needs `contents: write`.
+
+Dependabot checks npm and GitHub Actions weekly and targets `develop` for version updates. Security updates still use GitHub's default branch, `main`: move the patch through a versioned `hotfix/X.Y.Z` branch and the normal checks instead of bypassing branch routing.
 
 ## Reports and rights
 
