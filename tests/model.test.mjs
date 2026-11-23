@@ -106,3 +106,45 @@ test('CSV append merges into existing rows and supports a BOM and empty export',
   assert.equal(state.collection[0].quantity, 2);
   assert.deepEqual(importCSV(exportCSV(emptyState())), emptyState());
 });
+
+function replaceCrypto(t, value) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'crypto');
+  Object.defineProperty(globalThis, 'crypto', { configurable: true, value });
+  t.after(() => {
+    if (original) Object.defineProperty(globalThis, 'crypto', original);
+    else delete globalThis.crypto;
+  });
+}
+
+test('new collection row IDs prefer native cryptographic UUIDs', t => {
+  const expected = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  replaceCrypto(t, { randomUUID: () => expected, getRandomValues: () => { throw new Error('Fallback should not run'); } });
+  assert.equal(addCard(emptyState(), card).collection[0].uid, expected);
+});
+
+test('secure random bytes generate version-four UUIDs when randomUUID is unavailable', t => {
+  let offset = 0;
+  const crypto = { getRandomValues(bytes) {
+    assert.equal(this, crypto);
+    assert.ok(bytes instanceof Uint8Array); assert.equal(bytes.length, 16);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = offset++;
+    return bytes;
+  } };
+  replaceCrypto(t, crypto);
+  const first = addCard(emptyState(), card);
+  const second = addCard(first, { ...card, id: 'another-card' });
+  assert.equal(first.collection[0].uid, '00010203-0405-4607-8809-0a0b0c0d0e0f');
+  assert.match(second.collection[1].uid, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.notEqual(second.collection[1].uid, first.collection[0].uid);
+});
+
+test('missing secure randomness blocks new IDs while preserving existing stored IDs and state', t => {
+  const state = addCard(emptyState(), card);
+  state.collection[0].uid = 'card-existing-legacy-id';
+  const before = structuredClone(state);
+  replaceCrypto(t, undefined);
+  assert.throws(() => addCard(state, { ...card, id: 'new-card' }), /Secure randomness is required/);
+  assert.deepEqual(state, before);
+  assert.equal(normalizeState(state).collection[0].uid, 'card-existing-legacy-id');
+  assert.equal(addCard(state, card).collection[0].uid, 'card-existing-legacy-id');
+});
