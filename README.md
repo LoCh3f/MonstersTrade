@@ -1,5 +1,7 @@
 # Monstertrade
 
+![Monstertrade — Collect. Trade. Level up.](docs/assets/monstertrade-intro.gif)
+
 A free Pokémon collection app with browser-local collections and a serverless public price service for Cloudflare. The app and Cloudflare Worker use the name Monstertrade (`monstertrade` in deployment configuration). No application account or paid API key is required.
 
 [Contributing](CONTRIBUTING.md) · [Security reports](SECURITY.md)
