@@ -52,8 +52,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Check locked dependencies for high and critical advisories
+        run: npm audit --package-lock-only --ignore-scripts --audit-level=high
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Check source and bundled assets
         run: npm run check
       - name: Run unit and regression tests

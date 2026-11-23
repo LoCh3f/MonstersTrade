@@ -1,18 +1,19 @@
 # Contributing to Monstertrade
 
-Use Node.js 24 (see `.nvmrc`) and install the committed dependency versions with `npm ci`. The browser app is buildless: the files in `dist/` are source files and must be committed. The Worker and D1 migrations live in `worker/` and `migrations/`.
+Use Node.js 24 (see `.nvmrc`) and install the committed dependency versions with `npm ci --ignore-scripts`. The browser app is buildless: the files in `dist/` are source files and must be committed. The Worker and D1 migrations live in `worker/` and `migrations/`.
 
 ## Development and checks
 
 ```sh
-npm ci
+npm ci --ignore-scripts
 npm run db:migrate:local
 npm run dev:cloudflare
 ```
 
-Before opening a pull request, run the same checks as CI:
+Before opening a pull request, run the same checks as CI (including high/critical dependency advisories):
 
 ```sh
+npm audit --package-lock-only --ignore-scripts --audit-level=high
 npm run check
 npm test
 npm run test:smoke
@@ -35,7 +36,7 @@ Use Conventional Commits, for example `fix(prices): retain the previous quote af
 - Keep source dates, missing values, and provider errors explicit. Do not synthesize prices or infer a product variant from an unreviewed mapping.
 - Keep credentials, local database files, personal exports, and assistant metadata out of Git. `.gitignore` covers local `.env*`, `.dev.vars*`, `.wrangler/`, `.openai/`, `.codex*` directories, and preview evidence.
 
-Staging and production deployments are configured separately from CI; see [README.md](README.md#github-actions-and-production-setup). Staging uses a separate public Worker and D1 database, with shared account credentials. A passing dry run alone does not prove that a remote database or scheduled invocation is healthy.
+Staging and production deployments are configured separately from CI; see [README.md](README.md#github-actions-and-production-setup). Staging uses a separate public Worker and D1 database, with credentials stored in its own GitHub environment. Use separate expiring tokens with the narrowest Cloudflare permissions available; a shared account can still mean shared account-level authority. A passing dry run alone does not prove that a remote database or scheduled invocation is healthy.
 
 ## Repository settings
 

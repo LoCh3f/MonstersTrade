@@ -34,6 +34,13 @@ export function deploymentPlan(raw, env = {}, args = [], directory = root) {
   if (config.name !== (staging ? 'monstertrade-staging' : 'monstertrade') || typeof config.main !== 'string' || !config.assets?.directory) throw new Error('Expected the selected Monstertrade Worker and static assets in wrangler.jsonc.');
   bindings[0].database_id = id;
   if (env.CLOUDFLARE_ACCOUNT_ID) config.account_id = env.CLOUDFLARE_ACCOUNT_ID;
+  if (env.DEPLOY_SHA !== undefined) {
+    if (typeof env.DEPLOY_SHA !== 'string' || !/^[a-f\d]{40}$/i.test(env.DEPLOY_SHA)) throw new Error('DEPLOY_SHA must be a full 40-character commit SHA.');
+    config.vars = { ...config.vars, DEPLOY_COMMIT: env.DEPLOY_SHA.toLowerCase() };
+  } else if (config.vars) {
+    // A checked-in value must never impersonate a deployment's verified revision.
+    delete config.vars.DEPLOY_COMMIT;
+  }
   // Resolve source paths for the temporary config without editing local settings.
   delete config.$schema;
   config.main = resolve(directory, config.main);
