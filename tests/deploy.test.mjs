@@ -177,6 +177,20 @@ const stagingReleaseEnv = () => {
   return { ...env, ...stagingDatabases(), DEPLOY_TARGET: 'staging', MONSTERTRADE_STAGING_URL: 'https://staging.monstertrade.example' };
 };
 
+test('deployment cannot fall back to the legacy repository credential when an environment token is absent', async () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const mappings = [...workflow.matchAll(/^\s+CLOUDFLARE_API_TOKEN:\s*(.+)$/gm)];
+  assert.ok(mappings.length > 0, 'Wrangler must receive its environment token explicitly');
+  for (const [, expression] of mappings) assert.equal(expression, '${{ secrets.CLOUDFLARE_DEPLOY_TOKEN }}');
+  assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN\b/);
+  for (const env of [releaseEnv(), stagingReleaseEnv()]) {
+    const target = env.DEPLOY_TARGET || 'production';
+    await assert.rejects(checkRelease({ ...env, CLOUDFLARE_API_TOKEN: '' }, {
+      rawConfig: stagingRaw(), fetchImpl: async () => assert.fail('Missing environment token must fail before network access'),
+    }), new RegExp(`Set CLOUDFLARE_DEPLOY_TOKEN in the ${target} GitHub environment`));
+  }
+});
+
 test('release gate rejects missing configuration and invalid identities before any network call', async () => {
   const fetchImpl = async () => { assert.fail('Invalid configuration must not contact GitHub'); };
   for (const key of Object.keys(releaseEnv())) {

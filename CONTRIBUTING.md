@@ -36,7 +36,7 @@ Use Conventional Commits, for example `fix(prices): retain the previous quote af
 - Keep source dates, missing values, and provider errors explicit. Do not synthesize prices or infer a product variant from an unreviewed mapping.
 - Keep credentials, local database files, personal exports, and assistant metadata out of Git. `.gitignore` covers local `.env*`, `.dev.vars*`, `.wrangler/`, `.openai/`, `.codex*` directories, and preview evidence.
 
-Staging and production deployments are configured separately from CI; see [README.md](README.md#github-actions-and-production-setup). Staging uses a separate public Worker and D1 database, with credentials stored in its own GitHub environment. Use separate expiring tokens with the narrowest Cloudflare permissions available; a shared account can still mean shared account-level authority. A passing dry run alone does not prove that a remote database or scheduled invocation is healthy.
+Staging and production deployments are configured separately from CI; see [README.md](README.md#github-actions-and-production-setup). Staging uses a separate public Worker and D1 database, with credentials stored in its own GitHub environment. Store deployment tokens only under the environment secret name `CLOUDFLARE_DEPLOY_TOKEN`; the legacy repository `CLOUDFLARE_API_TOKEN` is intentionally ignored by the new workflow. Use separate expiring tokens with the narrowest Cloudflare permissions available; a shared account can still mean shared account-level authority. A passing dry run alone does not prove that a remote database or scheduled invocation is healthy.
 
 ## Repository settings
 
