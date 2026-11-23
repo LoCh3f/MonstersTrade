@@ -28,7 +28,12 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  "ratelimits": [
+    { "name": "PUBLIC_API_RATE_LIMITER", "namespace_id": "14693313871", "simple": { "limit": 60, "period": 60 } },
+    { "name": "PRICE_ADMISSION_RATE_LIMITER", "namespace_id": "14693313872", "simple": { "limit": 10, "period": 60 } }
+  ],
   "vars": {
+    "REQUIRE_RATE_LIMITERS": "true",
     "MAX_TRACKED_CARDS": "500",
     "MAX_UPSTREAM_REQUESTS_PER_DAY": "1000",
     "REFRESH_BATCH_SIZE": "2"
@@ -52,7 +57,12 @@
         }
       ],
       "triggers": { "crons": ["*/5 * * * *"] },
+      "ratelimits": [
+        { "name": "PUBLIC_API_RATE_LIMITER", "namespace_id": "14693313873", "simple": { "limit": 60, "period": 60 } },
+        { "name": "PRICE_ADMISSION_RATE_LIMITER", "namespace_id": "14693313874", "simple": { "limit": 10, "period": 60 } }
+      ],
       "vars": {
+        "REQUIRE_RATE_LIMITERS": "true",
         "MAX_TRACKED_CARDS": "50",
         "MAX_UPSTREAM_REQUESTS_PER_DAY": "100",
         "REFRESH_BATCH_SIZE": "1"
