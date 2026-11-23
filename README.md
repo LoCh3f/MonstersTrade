@@ -1,44 +1,183 @@
-# PocketVault
+# Monstertrade
 
-A free Pokémon card collection app inspired by DarkDex's collection workflow, with independent branding and a dark interface. Runs locally without dependencies, registration, subscriptions, or a paid API key.
+A free Pokémon collection app with browser-local collections and a serverless public price service for Cloudflare. The app and Cloudflare Worker use the name Monstertrade (`monstertrade` in deployment configuration). No application account or paid API key is required.
 
-## Run
+[Contributing](CONTRIBUTING.md) · [Security reports](SECURITY.md)
 
-From this directory, using Node.js 22 or later:
+## Run locally
 
-```sh
-node server.mjs
-```
-
-Open [PocketVault](http://127.0.0.1:4173). Set `PORT` to use another port. The server binds to your computer only. The `dist/` directory is also suitable for static hosting.
-
-Run the offline unit tests:
+Use Node.js 24 (the version in `.nvmrc`) and npm. Install the pinned deployment tools, create the local price tables, and start the full app:
 
 ```sh
-node --test tests/*.test.mjs
+npm ci
+npm run db:migrate:local
+npm run dev:cloudflare
 ```
+
+Open the localhost URL printed by Wrangler. Local D1 data lives under the ignored `.wrangler/` directory. The database ID in the checked-in configuration is a local-development placeholder; these commands do not create a remote database or require Cloudflare login.
+
+Run the same checks as GitHub CI without publishing:
+
+```sh
+npm run check
+npm test
+npm run test:smoke
+npm run check:deploy
+```
+
+`check` validates syntax, configuration, and local assets. `test:smoke` migrates a fresh, isolated local D1 database and exercises the real Worker, health endpoint, and static assets.
+
+The dry run validates bundling and configuration, but does not verify a remote database, execute remote migrations, or activate scheduled jobs.
+
+`npm start` still serves `dist/` at [localhost:4173](http://127.0.0.1:4173) without installing dependencies. This static-only preview supports the collection interface and direct catalogue requests, but has no shared price API or public price history. Use the Wrangler preview for the complete experience. Neither local preview server is used in production.
+
+## Deploy to your Cloudflare account
+
+The project uses [Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/get-started/), a Worker for `/api/*`, and a D1 database containing public quotations. Other matching asset requests are served directly. There is no application login or cloud collection synchronization.
+
+After local validation, authenticate and create the public price database once:
+
+```sh
+npx wrangler login
+npm run db:create
+```
+
+`db:create` runs `wrangler d1 create monsterstrade-prices --binding PRICES_DB --update-config`. It creates a **remote** database and replaces the matching binding's local placeholder with the returned UUID. Verify that `wrangler.jsonc` contains exactly one `PRICES_DB` binding with that real `database_id`. If the database already exists, run `npx wrangler d1 list` and put its UUID in the existing binding instead of creating another database. The database retains its original technical name, `monsterstrade-prices`, so the branding update does not change the data binding.
+
+Apply the remote schema, then publish:
+
+```sh
+npm run db:migrate:remote
+npm run deploy
+```
+
+The deploy script stops before publishing if `PRICES_DB` has no real UUID. It accepts `CLOUDFLARE_DATABASE_ID` as a deployment override, so a real database identifier does not need to be committed. The ordinary `npm run deploy` command does not create resources or apply migrations. Use `npm run deploy -- --migrate` to apply outstanding remote migrations before publishing; this is the command used by CD. A migration failure stops deployment.
+
+Wrangler prints the `https://monstertrade.<your-subdomain>.workers.dev` address. Verify `/api/health`, open a catalogue card to acquire its first public quote, and check Cloudflare's scheduled invocation metrics after deployment. The five-minute Cron schedule becomes active only after a real deployment; local preview and dry runs do not activate it.
+
+There is no build step. Node.js is needed for development and deployment tooling, not for a continuously running application server. Any checkout-local `.openai/hosting.json` belongs to the earlier Sites publication. It is ignored and is not part of this Cloudflare deployment or the GitHub source package.
+
+A custom domain is optional and registration is a separate cost. After adding its active zone to Cloudflare, use the Worker's **Settings → Domains & Routes → Add → Custom Domain**. See the [custom domain guide](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/).
+
+## GitHub Actions and production setup
+
+The repository includes two workflows:
+
+| Workflow | Trigger | Result |
+| --- | --- | --- |
+| **CI / Checks** | Pull requests and pushes to `main` | Installs the lockfile, validates syntax/configuration/assets, runs tests, migrates an isolated local D1 database for a Worker smoke test, and checks the deployment bundle without cloud credentials. |
+| **Deploy to Cloudflare** | A successful CI run on `main`, or a manual run on `main` | Validates the intended revision, repeats all checks for manual runs, applies remote D1 migrations, and deploys the Worker and assets. Automatic deployment requires the explicit enable variable below. |
+
+Configure these under **Settings → Secrets and variables → Actions** in GitHub. The official [Cloudflare CI authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/#1-authentication) explains account-scoped tokens, and [GitHub's repository-secret guide](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#creating-secrets-for-a-repository) shows where to save them.
+
+| Type | Name | Value |
+| --- | --- | --- |
+| Repository secret | `CLOUDFLARE_API_TOKEN` | A Cloudflare token scoped to the target account with Workers deployment permissions and **Account → D1 → Edit** for migrations. See [D1 token permissions](https://developers.cloudflare.com/d1/tutorials/import-to-d1-with-rest-api/#1-create-a-d1-api-token). |
+| Repository secret | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing the Worker and database. |
+| Repository variable | `CLOUDFLARE_DATABASE_ID` | The UUID of the existing `monsterstrade-prices` D1 database. |
+| Repository variable | `CLOUDFLARE_DEPLOY_ENABLED` | Set to `true` when automatic production deployment after successful CI is wanted. Leave absent until setup is complete. |
+| Repository variable, optional | `MONSTERTRADE_URL` | The deployed HTTPS origin for a post-deployment health check, for example `https://monstertrade.example.com`. Use no path beyond `/`, credentials, query, or fragment. |
+
+Create the remote database once using the preceding Cloudflare setup instructions. Keep credentials in GitHub secrets, not in YAML or the repository. Deployment injects the database override into temporary configuration under ignored `.wrangler/deploy-*/`, then removes it; it never edits `wrangler.jsonc`. The checked-in local placeholder remains suitable for uncredentialed CI. Passing `--dry-run`, including together with `--migrate`, never applies remote migrations.
+
+For the first release, use **Actions → Deploy to Cloudflare → Run workflow** on `main`. After a successful deployment and health check, set `CLOUDFLARE_DEPLOY_ENABLED=true` to deploy subsequent successful `main` revisions automatically. Pull requests and forked branches cannot deploy. Deployments reject an outdated commit instead of replacing a newer revision. They run sequentially so migrations and publication do not overlap.
+
+The workflows use repository secrets and do not require a GitHub environment feature or paid-plan upgrade. Branch protection and other repository rules are separate GitHub settings, and their availability depends on the repository's visibility and plan. See [repository settings](CONTRIBUTING.md#repository-settings) for the intended merge policy. Workflow files alone do not enforce it.
+
+A failed deployment or post-deployment health check needs investigation before retrying. A successful migration is not undone if publishing fails. Likewise, rolling back the Worker does not undo D1 schema changes; write compatible migrations and confirm database state before a rollback. The public price database can be rebuilt from sources going forward, but discarded historical observations are not automatically recoverable.
 
 ## Features
 
-- Search the public card catalogue and save cards with quantities, per-card purchase costs, condition, and binder.
-- Edit collection entries, organize binders, and view collection value and cost.
-- Save wishlist cards with target prices; see whether the latest stored estimate reaches a target while using the app.
-- Track set progress by distinct card IDs rather than duplicate copies.
-- Export collection rows to CSV or the complete state to JSON. CSV import merges rows; JSON restore replaces the collection, wishlist, binders, and history. Imports and card removals offer a temporary undo action, until another change is saved.
-- Refresh available EUR reference prices and record real daily collection snapshots. No historical values are fabricated.
+- Search the public Pokémon catalogue in English or Italian; track quantities, per-card purchase costs, condition, and binders.
+- Search sealed products by name, set and type: booster packs, booster boxes, Elite Trainer Boxes, collections, tins, blisters and bundles. Track quantities as whole sealed products, with per-product costs and packaging condition. Filter cards and sealed holdings separately in the collection.
+- Add custom sealed products with edition, language, product code and source link. Record dated personal valuations and review their local history, including multiple observations on the same day.
+- Record the exact catalogue variant where available, including finishes and special prints. Different variants, grading records, and personal valuation evidence remain separate entries.
+- Record grading company and grade without assigning an unsupported graded market price.
+- Add an optional personal valuation in EUR with its date, note, and source link. It remains separate from purchase cost and the provider's quote, survives refreshes, and is explicitly identified when used in collection totals.
+- View price source, provider date, last acquisition/attempt, and missing, stale, failed, or unverified states. A generic market reference remains labelled as such.
+- Refresh collection and wishlist references, with automatic refresh when returning to the app as needed. The shared cache prevents the manual button from repeatedly fetching the same provider data.
+- View shared per-card reference history and local aggregate collection snapshots. Coverage shows how many holdings have prices, personal valuations, old references, or no usable quote.
+- Save wishlist targets, organize binders, and track set progress by distinct card IDs.
+- Export collection rows to CSV or the complete local state to JSON. CSV merges rows; JSON restore replaces local collection, wishlist, binders, and aggregate history after a preview. Imports and removals offer a temporary undo action until another change is saved.
 
-## Data and pricing
+## How prices are handled
 
-Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). Market estimates use the positive EUR `pricing.cardmarket.trend` value, with its provider timestamp. Missing prices stay unavailable. Stored card condition does **not** adjust the estimate; graded values, sales fees, shipping, and taxes are not calculated. These estimates are not offers to buy or guaranteed resale values.
+Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). The shared service requests canonical English card records from TCGdex and stores Cardmarket EUR reference prices. Catalogue language and the language of a physical card do **not** establish that the market quote is language-specific. TCGdex documents daily Cardmarket updates; repeated requests do not imply a newer price. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
 
-TCGdex documents daily Cardmarket updates, so refreshing repeatedly does not imply a newer price. The six featured cards contain a dated fallback snapshot and bundled artwork for the opening screen. Search and refresh require an internet connection. A failed refresh may leave the last stored estimate visible; check its date. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
+The default generic reference is the positive, finite EUR `pricing.cardmarket.trend`. A price observation records source, metric, product ID, provider timestamp, fetch/attempt timestamps, and mapping status. References older than 48 hours are labelled stale. Failed refreshes keep the prior observation and report the failure; a successful response with no usable price leaves the current price unavailable and keeps the prior valid observation separately in the browser. Late responses cannot silently replace a newer observation.
 
-Collection data is stored in this browser's local storage, per site address. It is not synced between devices, browsers, or different ports. Clearing browser storage removes it. Export a JSON backup before changing browsers or moving to another address; CSV covers collection entries only. Storage capacity is limited by the browser even though there is no subscription card limit.
+**Variant pricing is deliberately conservative.** `variants_detailed` identifies available variants, but a third-party product ID alone does not prove the correct price field. In particular, a printed holo does not universally correspond to Cardmarket's `trend-holo`. The initial reviewed mapping list in `dist/pricing.js` is empty: selected variants are marked unverified and receive no automatic specific valuation until a card/variant/product/metric mapping is independently reviewed and tested. An unspecified variant can still use the explicitly labelled generic reference. A personal valuation can cover a specific variant or graded card while that mapping is unresolved.
 
-Daily history begins when you use the app. It is a record of stored collection totals on those days, including additions, removals, and price refreshes—not a backfilled market performance series. Wishlist checks run in the app; there are no background push notifications.
+Market references are not adjusted for physical condition, grading, shipping, taxes, or selling fees. A graded entry needs a personal valuation to contribute to the estimated collection value. Prices are indicative references, not offers or guaranteed proceeds. This release does not ingest Cardmarket's large direct download or use a proprietary DarkDex valuation engine.
+
+The six featured cards include bundled artwork and dated fallback references. Opening details requests current shared data when the service is available. An offline or static-only session can still show existing saved data, but cannot acquire public price history.
+
+## Sealed product prices
+
+Sealed references come from the public [TCG Prices sealed CSV](https://tcgprices.app/data), licensed **CC BY 4.0**, with visible attribution in the app. The service filters the feed to Pokémon/Pokémon Japan products, the EU market and native EUR prices. No API key or currency conversion is used. The observed feed on 23 November 2026 contained 411 matching products; coverage and availability can change. Product images are not supplied by this price dataset. The app uses the exact TCGplayer product ID to load a catalogue photo directly from TCGplayer’s CDN, with a neutral packaging icon if the image is unavailable.
+
+These prices are the **lowest asking price among stores with stock**, not completed-sale prices, Cardmarket trends or guaranteed resale values. Check the linked product comparison for availability and the final checkout total. The source does not identify a physical product's language, so EU must not be read as Italian. See the provider's [methodology](https://tcgprices.app/methodology).
+
+Automatic valuation requires the exact source identity (`sealed-tcgp-<product-id>-eu`), a matching EUR retail quote, unspecified language and factory-sealed packaging. A specific language, damaged packaging or custom edition requires a personal valuation. Linked catalogue identity is locked in the editor; add a custom product for a different edition or an item missing from the source. Card prices are never substituted for sealed prices, and sealed products do not count toward card-set completion.
+
+The shared service imports the public feed at most once per 24 hours, using a database lease and bounded download, parsing and retry limits. The existing Cron checks whether that feed is due. Product search, individual references and public history are served from D1. Successful source observations create daily history points using the CSV date; errors retain older evidence and never relabel it as current. No historical prices are invented before the first import. Public history is retained for up to 365 days.
+
+The feed import is bounded to 3 MiB, 15,000 CSV records, 2,000 supported products and a 1.8 MB normalized database payload. It is the largest scheduled workload: local parser optimization does not establish that the complete cold invocation fits Workers Free's 10 ms CPU budget. Measure the real invocation after deployment before relying on unattended free-tier updates. No paid plan is enabled automatically; custom products, manual histories and saved observations remain usable when synchronization fails.
+
+Personal valuation history is separate, stays in the browser and is included in JSON/CSV exports. Saving an amount with its date, note or source records an observation; clearing the current override retains previous observations. Each entry allows up to 1,000 personal observations and rejects a change beyond that limit instead of silently discarding history. The total collection estimate can combine card references, sealed retail references and personal valuations, all visibly labelled; it is not a forecast of resale proceeds.
+
+Existing Cloudflare installations must apply the new `0003_sealed_prices.sql` migration with `npm run db:migrate:remote` before publishing the updated Worker. Local testing uses `npm run db:migrate:local`. The sealed catalogue needs the Worker service; custom sealed products and saved personal histories remain usable in the static preview.
+
+## Card and product photos
+
+Card artwork uses [TCGdex assets](https://tcgdex.dev/assets), with bundled thumbnails for the six featured cards. Card details prefer the available high-resolution source image. Sealed products use TCGplayer catalogue images matched by the immutable TCGplayer product ID: 400-pixel thumbnails and a 1000-pixel full-size link. The [TCGCSV image documentation](https://tcgcsv.com/docs) describes these image URL formats; no TCGCSV feed request is made by the browser.
+
+Images load directly from their image provider, are lazy-loaded in lists and do not require extra Worker calls, a new database or an image-processing service. Sealed product editors also accept an optional direct HTTPS image URL. That override stays with the local entry and survives price refresh, duplicate additions, JSON and CSV backups. Leaving it blank restores the catalogue photo where available. This feature stores an image link; it does not upload personal image files or copy remote image bytes into backups. Unavailable photos fall back to the packaging icon.
+
+Photos are catalogue illustrations, not proof of a physical item's language, edition, condition or authenticity. TCGdex and TCGplayer image attribution is separate from TCG Prices' price-data licence; CC BY 4.0 for the price dataset does not grant ownership of card artwork or product photography.
+
+## Public cache, schedules, history, and limits
+
+The Worker exposes read-only public endpoints:
+
+- `GET /api/health`
+- `GET /api/prices/<card-id>`
+- `GET /api/prices/<card-id>/history?variant=generic&days=90` (or a known variant ID)
+- `GET /api/sealed?q=<name-or-set>&type=<product-type>&page=1`
+- `GET /api/sealed/<sealed-product-id>`
+- `GET /api/sealed/<sealed-product-id>/history?days=90`
+
+The price store contains catalogue IDs, normalized public quotations, refresh bookkeeping, and public historical observations. It has no account, personal collection, quantity, purchase cost, or personal-valuation tables. Browser price requests identify public cards or sealed products; card catalogue searches and metadata requests still go directly to TCGdex. Sealed catalogue queries go to this app's Worker.
+
+Defaults in `wrangler.jsonc`:
+
+| Setting | Initial value | Purpose |
+| --- | --- | --- |
+| `MAX_TRACKED_CARDS` | 500 | Bound the number of active public catalogue cards requested within the last 30 days. This is not a personal collection limit. |
+| `MAX_UPSTREAM_REQUESTS_PER_DAY` | 1000 | Cap TCGdex card provider calls per UTC day. The shared sealed feed has its own global 24-hour interval and retry backoff. |
+| `REFRESH_BATCH_SIZE` | 2 | Process at most two due cards per scheduled invocation. |
+| Cron | Every five minutes | Work through due cards; quotes have a 24-hour refresh interval. |
+
+Cron refreshes active cards requested within the last 30 days. After 30 days without requests, a card releases its active slot while its archived history remains available. Reactivation must also fit within the active-card limit. Requests use a timeout, database leases to avoid duplicate refreshes, and bounded retry delays, including provider `Retry-After` responses. Limits or upstream failures can delay an update; a daily acquisition is a target, not a guarantee. Cached prices remain available when refreshes fail. A full active catalogue or exhausted acquisition budget can prevent new cards from receiving a shared quote until capacity becomes available. Archived catalogue rows are eligible for bounded cleanup after 365 days without requests, once their retained history has expired.
+
+Public history retains up to 365 days and is indexed by the **provider's observation date**. Fetching the same old price on another day does not manufacture a new historical point. Missing and unverified variant prices are not inserted as real observations. History starts with acquired observations; there is no fabricated backfill. Retention cleanup is bounded across Cron runs.
+
+The separate collection chart stays in the browser and records aggregate snapshots only while the app is used. Snapshot causes distinguish collection changes, price refreshes, and visits; acquisitions and removals must not be interpreted as market returns. The server cannot calculate historical personal holdings from public price data alone. Wishlist target checks run in the app; there are no background personal notifications.
+
+Cloudflare makes [static asset requests free and unlimited](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/), while the price API, schedules, and database are subject to [Workers limits](https://developers.cloudflare.com/workers/platform/limits/) and [D1 quotas](https://developers.cloudflare.com/d1/platform/pricing/). The Free plan currently allows 100,000 Worker requests/day and only **10 ms CPU per invocation, including Cron**; D1 includes 5 million rows read/day, 100,000 rows written/day, and 5 GB total storage. These quotas can be shared with other projects in the account. The initial caps and small batches bound work, but free production capacity is not guaranteed by a successful local preview. After authenticated deployment, measure CPU, database operations, and errors before increasing scope; reduce the batch or catalogue cap if needed. The app never upgrades a plan automatically.
+
+## Browser data and migration
+
+The browser still stores personal data under `pocketvault.collection.v1`; the document inside that key is now schema version 2. On opening old data, the app validates and migrates it, preserving row IDs, quantities, exact weighted purchase costs, binders, wishlist, and existing aggregate snapshots. Old entries receive an unspecified variant rather than a guessed one. The original v1 payload is saved under `pocketvault.before-v2` before replacement and can be downloaded from the app. A failed migration or storage write shows a recovery warning instead of silently discarding the old data.
+
+JSON imports accept versions 1 and 2. CSV accepts older exports and includes new identity, valuation, and provenance fields in new exports. Importing saved prices does not turn them into freshly verified quotes. JSON backups contain the complete personal state; shared public price history remains on Cloudflare and is not included in those local backups.
+
+Storage is specific to browser, device, and site origin. Clearing browser storage removes the personal vault. Export a JSON backup before changing browsers or moving from an old URL to `workers.dev`, and again before moving to a custom domain; import it at the new address. There is no cross-device synchronization. Browser capacity still limits the size of a vault even though there is no subscription card limit.
 
 ## Scope and credits
 
-This version has no accounts, cloud synchronization, team access, camera recognition, background price jobs, native Excel import, dedicated sealed/graded product tracking, or DarkDex's proprietary valuation system. The source-site review and feature comparison are in [INSPECTION.md](./INSPECTION.md).
+This version has no application accounts, cloud collection synchronization, team access, camera recognition, native Excel import, graded-price provider, or DarkDex proprietary valuation system. Sealed coverage is limited to the source catalogue or manual entries; no automatic sealed resale or Italian-specific provider is included. The original source-site review is in [INSPECTION.md](./INSPECTION.md).
 
-TCGdex's [card database](https://github.com/tcgdex/cards-database) is MIT licensed. Pokémon names, card artwork, and related marks belong to their respective rights holders; the database license does not transfer ownership of those assets. PocketVault is independent of DarkDex, Nintendo, The Pokémon Company, and TCGdex. No DarkDex application source or branded artwork is bundled.
+The Monstertrade name and blue-and-orange logo were supplied by the app owner. The original logo is bundled at `dist/assets/monstertrade-logo.jpg`. Free access to the app is not a source-code license and does not grant permission to redistribute the logo, card artwork, or product photography. No project source license has been selected yet.
+
+TCGdex's [card database](https://github.com/tcgdex/cards-database) is MIT licensed. Pokémon names, card artwork, and related marks belong to their respective rights holders; the database license does not transfer ownership of those assets. Monstertrade is independent of DarkDex, Nintendo, The Pokémon Company, and TCGdex. No DarkDex application source or branded artwork is bundled.

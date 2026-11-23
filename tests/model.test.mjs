@@ -60,7 +60,7 @@ test('daily history replaces today and does not fabricate earlier days', () => {
 
 test('JSON rejects unsupported, malformed, ambiguous, or dangerous entries', () => {
   const state = recordSnapshot(addCard(emptyState(), card));
-  assert.throws(() => normalizeState({ ...state, version: 2 }));
+  assert.throws(() => normalizeState({ ...state, version: 3 }));
   assert.throws(() => normalizeState({ ...state, collection: 'bad' }));
   assert.throws(() => normalizeState({ ...state, collection: [...state.collection, state.collection[0]] }));
   assert.throws(() => normalizeState({ ...state, binders: [] }));

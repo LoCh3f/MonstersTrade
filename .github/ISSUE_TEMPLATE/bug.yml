@@ -1,0 +1,49 @@
+name: Bug report
+description: Report a reproducible problem in Monstertrade.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use synthetic examples and public product IDs. Do not attach personal backups or credentials. Follow SECURITY.md for vulnerability reports.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include a public card/product ID and source date if prices or photos are involved.
+      placeholder: |
+        1. Open…
+        2. Select…
+        3. Observe…
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser, device, and version
+      placeholder: Chrome on Android; commit or deployment date if known
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Where does this happen?
+      options:
+        - Deployed Cloudflare app
+        - Local Wrangler app
+        - Static-only preview
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Relevant error or screenshot
+      description: Remove private collection details and credentials first.

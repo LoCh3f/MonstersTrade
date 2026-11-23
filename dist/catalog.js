@@ -80,6 +80,24 @@ function imageBase(value) {
   }
 }
 
+// These are catalogue choices only, not validated price associations. Labels
+// can be translated by TCGdex; identity always comes from card ID + variant ID.
+function variantOptions(raw) {
+  if (!Array.isArray(raw.variants_detailed)) return [];
+  const seen = new Set();
+  return raw.variants_detailed.slice(0, 32).flatMap(variant => {
+    const id = variant?.variantId;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(id) || seen.has(id)) return [];
+    seen.add(id);
+    const type = typeof variant.type === 'string' ? variant.type.slice(0, 80) : 'Unspecified';
+    const foil = typeof variant.foil === 'string' ? variant.foil.slice(0, 80) : '';
+    const stamp = Array.isArray(variant.stamp) ? variant.stamp.filter(value => typeof value === 'string').slice(0, 8).map(value => value.slice(0, 80)) : [];
+    const size = typeof variant.size === 'string' ? variant.size.slice(0, 80) : '';
+    const label = [type, foil, ...stamp, size && size.toLowerCase() !== 'standard' ? size : ''].filter(Boolean).join(' · ');
+    return [{ id, label, type, foil, stamp }];
+  });
+}
+
 /** No price is invented when the source has no usable EUR trend. */
 export function normalizeCard(raw, lang = 'en') {
   if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || typeof raw.name !== 'string') {
@@ -103,6 +121,7 @@ export function normalizeCard(raw, lang = 'en') {
     price,
     priceUpdated: price === null ? null : timestamp,
     priceSource: price === null ? null : 'Cardmarket trend · EUR',
+    variantOptions: variantOptions(raw),
     lang: language(lang),
   };
 }

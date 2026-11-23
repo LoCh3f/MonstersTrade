@@ -55,6 +55,26 @@ test('image URLs are restricted to catalogue assets or simple bundled asset path
   assert.equal(cardImage(undefined), '');
 });
 
+test('variant choices keep scoped identifiers and translated labels without assigning prices', async () => {
+  const { normalizeCard } = await freshCatalog();
+  const source = card();
+  source.variants_detailed = [
+    { variantId: 'normal-1', type: 'Normale', size: 'standard', pricing: { cardmarket: { trend: 99 } } },
+    { variantId: 'reverse-1', type: 'Reverse', foil: 'Cosmo', stamp: ['set-logo'], size: 'standard' },
+    { variantId: 'normal-1', type: 'Duplicate' },
+    { variantId: '../invalid', type: 'Invalid' },
+    null,
+  ];
+  const normalized = normalizeCard(source, 'it');
+  assert.deepEqual(normalized.variantOptions, [
+    { id: 'normal-1', label: 'Normale', type: 'Normale', foil: '', stamp: [] },
+    { id: 'reverse-1', label: 'Reverse · Cosmo · set-logo', type: 'Reverse', foil: 'Cosmo', stamp: ['set-logo'] },
+  ]);
+  assert.equal(normalized.price, 0.14);
+  assert.equal(normalized.variantOptions[0].quote, undefined);
+  assert.equal(normalizeCard({ ...source, variants_detailed: undefined }).variantOptions.length, 0);
+});
+
 test('card cache deduplicates, isolates callers and respects forced refresh and language', async t => {
   const { getCard } = await freshCatalog();
   let calls = 0;

@@ -1,0 +1,23 @@
+name: Feature request
+description: Propose an improvement to the collection app.
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the collector's problem or missing workflow.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the result you would expect and any alternative you have tried.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Data sources or examples
+      description: Include public references if useful. Avoid private collection exports.

@@ -3,3 +3,15 @@ node_modules/
 *.log
 .sites-local/
 .env*
+.wrangler/
+.dev.vars*
+
+# Checkout-local assistant state and preview evidence, not application source.
+.openai/
+.codex/
+.codex-*/
+evidence/
+
+# Generated validation output and scratch files.
+coverage/
+tmp/
