@@ -2,8 +2,10 @@ name: CI
 
 on:
   pull_request:
+    branches: [main, develop, 'release/**', 'hotfix/**']
+    types: [opened, reopened, synchronize, edited, ready_for_review]
   push:
-    branches: [main]
+    branches: [main, develop, 'release/**', 'hotfix/**']
   workflow_dispatch:
 
 permissions:
@@ -14,6 +16,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  git-flow:
+    name: Git Flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source and commit history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Validate branch routing, commit messages, and release versions
+        run: node scripts/check-git-flow.mjs
+
   verify:
     name: Checks
     runs-on: ubuntu-latest
@@ -41,3 +60,5 @@ jobs:
         run: npm run test:smoke
       - name: Validate the Cloudflare deployment bundle
         run: npm run check:deploy
+      - name: Validate the isolated staging deployment bundle
+        run: npm run check:deploy:staging
