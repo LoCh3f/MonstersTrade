@@ -57,20 +57,25 @@ export async function checkGitFlowPolicy(env = process.env, { fetchImpl = fetch,
     for (let attempt = 0; attempt < 10; attempt++) {
       pr = await request(`pulls/${number}`);
       if (pr.head?.sha !== eventHead) return 'Superseded PR event; no success was published.';
-      if (pr.mergeable === false || shaPattern.test(pr.merge_commit_sha || '')) break;
+      if (pr.mergeable === false || (pr.mergeable === true && shaPattern.test(pr.merge_commit_sha || ''))) break;
       if (attempt < 9) await wait(2_000);
     }
     if (pr.number !== number || pr.state !== 'open' || pr.base?.repo?.full_name !== repository) throw new Error('The pull request is no longer open in this repository.');
-    if (!shaPattern.test(pr.merge_commit_sha || '') || pr.mergeable === false) throw new Error('A current, conflict-free test merge is required. Update the branch and rerun the policy.');
+    if (!shaPattern.test(pr.merge_commit_sha || '') || pr.mergeable !== true) throw new Error('A current, conflict-free test merge is required. Update the branch and rerun the policy.');
     // GitHub prefers checks on the test merge when present. Set the trusted
     // status on BOTH commits so a same-name PR job cannot hide a head failure.
     statuses.add(pr.merge_commit_sha);
     await status('pending');
+    const testMerge = await request(`git/commits/${pr.merge_commit_sha}`);
+    if (testMerge.sha !== pr.merge_commit_sha || !Array.isArray(testMerge.parents) || testMerge.parents.length !== 2
+      || testMerge.parents[0].sha !== pr.base?.sha || testMerge.parents[1].sha !== pr.head?.sha) {
+      throw new Error('Test merge parents do not match the current PR base and head.');
+    }
     const { refs, count } = await validateGitFlowMetadata(pr, repository, request);
     const current = await request(`pulls/${number}`);
     if (current.state !== 'open' || current.head?.sha !== refs.headSha || current.base?.sha !== refs.baseSha
       || current.base?.ref !== refs.base || current.head?.ref !== refs.head || current.title !== pr.title
-      || current.merge_commit_sha !== pr.merge_commit_sha) throw new Error('Pull request changed during validation; rerun the policy.');
+      || current.mergeable !== true || current.merge_commit_sha !== pr.merge_commit_sha) throw new Error('Pull request changed during validation; rerun the policy.');
     await status('success');
     return `Trusted Git Flow verified ${count} commit(s) on head and test merge.`;
   } catch (error) {

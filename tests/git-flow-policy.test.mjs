@@ -30,6 +30,7 @@ function fixture(overrides = {}, custom) {
       const response = custom?.(path, calls);
       if (response) return response;
       if (path === 'pulls/4') return Response.json(pr);
+      if (path === `git/commits/${merge}`) return Response.json({ sha: merge, parents: [{ sha: base }, { sha: head }] });
       if (path.startsWith('compare/')) return Response.json({ status: 'ahead', merge_base_commit: { sha: base }, total_commits: 1,
         commits: [{ sha: head, commit: { message: 'feat: add search\n\nA normal commit body.' } }] });
       assert.fail(`Unexpected metadata request: ${path}`);
@@ -97,13 +98,32 @@ test('releases sharing old history but missing current main cannot pass policy',
 });
 
 test('missing test merge and incomplete commit pages fail closed', async () => {
-  for (const overrides of [{ merge_commit_sha: null }, { mergeable: false }]) {
+  for (const overrides of [{ merge_commit_sha: null }, { mergeable: false }, { mergeable: null }]) {
     const f = fixture(overrides);
     await assert.rejects(checkGitFlowPolicy(env, f.dependencies), /conflict-free test merge/);
     assert.equal(f.statuses.some(s => s.state === 'success'), false);
   }
   const f = fixture({}, path => path.startsWith('compare/') ? Response.json({ merge_base_commit: { sha: base }, total_commits: 1, commits: [] }) : undefined);
   await assert.rejects(checkGitFlowPolicy(env, f.dependencies), /Incomplete/);
+});
+
+test('a stale merge SHA is ignored until GitHub finishes calculating mergeability', async () => {
+  let waits = 0;
+  const stale = 'e'.repeat(40);
+  const f = fixture({}, (path, calls) => path === 'pulls/4' && calls.filter(c => c === path).length === 1
+    ? Response.json({ ...f.pr, mergeable: null, merge_commit_sha: stale }) : undefined);
+  await checkGitFlowPolicy(env, { ...f.dependencies, wait: async () => { waits++; } });
+  assert.equal(waits, 1);
+  assert.equal(f.statuses.some(s => s.sha === stale), false);
+  assert.deepEqual(f.statuses.filter(s => s.state === 'success').map(s => s.sha), [head, merge]);
+});
+
+test('a test merge for a different head cannot receive a trusted passing status', async () => {
+  const f = fixture({}, path => path === `git/commits/${merge}`
+    ? Response.json({ sha: merge, parents: [{ sha: base }, { sha: 'e'.repeat(40) }] }) : undefined);
+  await assert.rejects(checkGitFlowPolicy(env, f.dependencies), /Test merge parents do not match/);
+  assert.deepEqual(f.statuses.filter(s => s.state === 'failure').map(s => s.sha), [head, merge]);
+  assert.equal(f.statuses.some(s => s.state === 'success'), false);
 });
 
 test('a superseded event never publishes success for the new PR head', async () => {

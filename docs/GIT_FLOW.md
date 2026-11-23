@@ -83,7 +83,7 @@ Open this same-repository `sync/*` branch against `develop`. If `main` advances 
 
 ## Deployment controls
 
-The [README setup table](../README.md#github-actions-and-production-setup) lists the repository secrets and variables. Production and staging use separate GitHub environment secrets, Workers, and D1 databases. Configure separate expiring deployment tokens with the minimum Cloudflare permissions available. Environment names do not reduce account-wide token authority. PR checks and other branch runs receive no cloud credentials.
+The [README setup table](../README.md#github-actions-and-production-setup) lists environment secrets and repository variables. Production and staging use separate GitHub environment secrets, Workers, and D1 databases. Configure separate expiring deployment tokens with the minimum Cloudflare permissions available. Environment names do not reduce account-wide token authority. PR checks and other branch runs receive no cloud credentials.
 
 | Target | Required branch | Automatic flag | Database variable | Health URL variable |
 | --- | --- | --- | --- | --- |
