@@ -1,4 +1,4 @@
-import { emptyState, normalizeState, addCard, updateEntry, removeEntry, totals, recordSnapshot, exportCSV, importCSV, CONDITIONS, SEALED_TYPES, effectivePrice, applyMarketUpdate, applySealedMarketUpdate } from './model.js';
+import { emptyState, normalizeState, addCard, updateEntry, removeEntry, totals, recordSnapshot, exportCSV, CONDITIONS, SEALED_TYPES, effectivePrice, applyMarketUpdate, applySealedMarketUpdate } from './model.js';
 import { searchCards, getCard, getSet, cardImage } from './catalog.js';
 import { getPrices, getPriceHistory, priceServiceHealth } from './price-client.js';
 import { normalizeQuote, quoteStatus } from './pricing.js';
@@ -68,6 +68,7 @@ let sealedQuery = '', sealedType = '', sealedPage = 1, sealedResult = null, seal
 let modalCard = null, modalEntry = null, modalWish = null, modalMode = 'collect', modalTicket = 0;
 let modalBundle = null, modalWarning = '', modalDraft = null, modalHistoryTicket = 0;
 let refreshing = false, toastTimer, undoAction = null, pendingImport = null, lastAutoRefresh = 0, priceService = null;
+let activeImport = null;
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const toastEl = document.querySelector('#toast');
@@ -260,7 +261,7 @@ function modalShell(title,body,small=false) {
   modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${esc(title)}</h2><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon('close')}</button></div><div class="modal-body">${body}</div>`;
   if(!modal.open)modal.showModal();
 }
-function closeModal(){++modalTicket;++modalHistoryTicket;modal.close();modalCard=null;modalEntry=null;modalWish=null;modalBundle=null;modalDraft=null;modalWarning='';pendingImport=null;}
+function closeModal(){++modalTicket;++modalHistoryTicket;activeImport?.abort();activeImport=null;modal.close();modalCard=null;modalEntry=null;modalWish=null;modalBundle=null;modalDraft=null;modalWarning='';pendingImport=null;}
 function ensureMarket(card) {
   if(card.market)return card;
   const variants=(card.variants||card.variantOptions||[]).map(v=>({...v,quote:v.quote||normalizeQuote({amount:null,currency:'EUR',mapping:'unverified'})}));
@@ -458,15 +459,32 @@ function importDialog() {
 }
 async function readImport(file) {
   if(!file)return;
+  activeImport?.abort();
+  const controller=new AbortController(),before=state;
+  activeImport=controller;pendingImport=null;
   try{
     if(file.size>20*1024*1024)throw new Error('Choose a file smaller than 20 MB.');
-    const source=await file.text();
     const json=file.name.toLowerCase().endsWith('.json');
     if(!json&&!file.name.toLowerCase().endsWith('.csv'))throw new Error('Choose a .json or .csv file.');
-    pendingImport={state:json?normalizeState(JSON.parse(source)):importCSV(source,state),json};
-    const imported=totals(pendingImport.state);
+    modalShell('Checking your file',`<p class="muted" role="status">Reading and checking your collection. Your saved vault will stay as it is until you review and apply the import.</p><div class="modal-actions">${button('Cancel','close-modal',null,'subtle')}</div>`,true);
+    const source=await file.text();
+    if(controller.signal.aborted)return;
+    const imported=await new Promise((resolve,reject)=>{
+      const worker=new Worker(new URL('./import-worker.js',import.meta.url),{type:'module'});
+      const finish=(error,value)=>{worker.terminate();controller.signal.removeEventListener('abort',abort);error?reject(error):resolve(value);};
+      const abort=()=>finish(new DOMException('Import cancelled.','AbortError'));
+      controller.signal.addEventListener('abort',abort,{once:true});
+      worker.onmessage=event=>finish(event.data.error?new Error(event.data.error):null,event.data);
+      worker.onerror=()=>finish(new Error('The file could not be checked. Please try again.'));
+      worker.onmessageerror=()=>finish(new Error('The file could not be read. Please try again.'));
+      try{worker.postMessage({source,format:json?'json':'csv',current:json?undefined:before});}catch(error){finish(error);}
+    });
+    if(controller.signal.aborted)return;
+    if(!json&&state!==before)throw new Error('Your collection changed while this file was being checked. Choose the file again to merge into your latest collection.');
+    pendingImport={state:imported.state,json,before};
     modalShell('Review your import',`<p class="muted">${json?'This backup will replace your collection, wishlist, binders, and history.':'This CSV will merge into your current collection. The resulting vault will contain:'}</p><div class="import-help"><strong>${num(imported.quantity)} items</strong> in ${num(pendingImport.state.collection.length)} entries<br>${pendingImport.state.wishlist.length} wishlist cards · ${pendingImport.state.binders.length} binders</div>${json?'<p class="form-hint" style="margin-top:16px">Download a backup of your current vault first if you want to keep both.</p>':''}<div class="modal-actions">${button('Back up current vault','export-json','download','subtle')}${button(json?'Restore backup':'Merge collection','apply-import','check','primary')}</div>`,true);
-  }catch(error){pendingImport=null;modalShell('This file couldn’t be imported',`<p class="muted">${esc(error.message)}</p><div class="modal-actions">${button('Choose another file','choose-file','upload','primary')}</div>`,true);}
+  }catch(error){if(controller.signal.aborted)return;pendingImport=null;modalShell('This file couldn’t be imported',`<p class="muted">${esc(error.message)}</p><div class="modal-actions">${button('Choose another file','choose-file','upload','primary')}</div>`,true);}
+  finally{if(activeImport===controller)activeImport=null;}
 }
 let refreshCursor=0;
 async function refreshPrices({automatic=false}={}) {
@@ -538,7 +556,7 @@ document.addEventListener('click',async event=>{
       case 'migration-backup':download(migrationBackup,'monstertrade-before-v2.json','application/json');break;
       case 'import':importDialog();break;
       case 'choose-file':document.querySelector('#import-file').click();break;
-      case 'apply-import':{if(!pendingImport)break;const before=state,next=pendingImport;commit(next.state,!next.json);closeModal();toast('Your collection is ready.',()=>{commit(before);toast('Previous collection restored.');});break;}
+      case 'apply-import':{if(!pendingImport)break;const before=state,next=pendingImport;if(!next.json&&before!==next.before)throw new Error('Your collection changed after this preview. Choose the file again before merging.');commit(next.state,!next.json);closeModal();toast('Your collection is ready.',()=>{commit(before);toast('Previous collection restored.');});break;}
       case 'export-json':download(JSON.stringify(state,null,2),filename('json'),'application/json');toast('Your complete vault backup is ready.');break;
       case 'export-csv':download(exportCSV(state),filename('csv'),'text/csv;charset=utf-8');toast('Collection exported. Use JSON to include your wishlist and history.');break;
       case 'recover':download(recoveredRaw,'monstertrade-recovery.json','application/json');break;
