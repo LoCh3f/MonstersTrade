@@ -39,6 +39,12 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const euro = value => value === null || value === undefined ? 'Unavailable' : new Intl.NumberFormat('en-IE', {style:'currency',currency:'EUR',maximumFractionDigits:2}).format(value);
 const num = value => new Intl.NumberFormat('en-GB').format(value);
 const dateLabel = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'short',year:'numeric'}).format(new Date(value)) : 'Date unavailable';
+// DOM attributes and form values are input, even when the current select only
+// offers these two languages. Keep the search selector's state canonical.
+const catalogueLanguage = value => value === 'it' ? 'it' : 'en';
+// Imported sets can use other valid catalogue languages, independently of the
+// English/Italian search selector. Preserve those codes without trusting markup.
+const catalogueSetLanguage = value => typeof value === 'string' && /^[a-z]{2}(?:-[a-z]{2})?$/.test(value) ? value : 'en';
 // Keep existing storage keys so the new brand retains every saved collection.
 const STORAGE_KEY = 'pocketvault.collection.v1';
 const MIGRATION_BACKUP_KEY = 'pocketvault.before-v2';
@@ -58,7 +64,7 @@ try {
       }
     } catch { recoveredRaw = raw; storageWarning = 'Your saved data could not be read. Download a recovery copy in Data & backups before making changes.'; }
   }
-  lang = localStorage.getItem('pocketvault.lang') === 'it' ? 'it' : 'en';
+  lang = catalogueLanguage(localStorage.getItem('pocketvault.lang'));
 } catch { storageWarning = 'Browser storage is unavailable. Changes will last for this visit only; export a backup before closing.'; }
 let page = pages[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard';
 let featured = [], query = '', searchPage = 1, searchResults = [], searchError = '', searching = false, searchTicket = 0, setView = null;
@@ -216,7 +222,7 @@ function catalogResults() {
   const rows=usingFeatured?featured:searchResults;
   if(!rows.length) return empty('search','No cards found.','Try another Pokémon name, switch languages, or return to the first page.','Browse favorites','clear-search');
   const display=usingFeatured?rows:setView?rows.slice((searchPage-1)*24,searchPage*24):rows;
-  return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(setView.name)}`:`Results for “${esc(query)}” · ${lang.toUpperCase()}`}</span><span>${usingFeatured?'Saved reference snapshots':'Open a card for details and pricing'}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${!usingFeatured?`<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${setView?searchPage*24>=rows.length?'disabled':'':rows.length<24?'disabled':''}>Next</button></div>`:'<p class="card-footer-note">Search the catalogue to explore more cards. Featured snapshot dates are shown in card details.</p>'}`;
+  return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(setView.name)}`:`Results for “${esc(query)}” · ${esc(lang.toUpperCase())}`}</span><span>${usingFeatured?'Saved reference snapshots':'Open a card for details and pricing'}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${!usingFeatured?`<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${setView?searchPage*24>=rows.length?'disabled':'':rows.length<24?'disabled':''}>Next</button></div>`:'<p class="card-footer-note">Search the catalogue to explore more cards. Featured snapshot dates are shown in card details.</p>'}`;
 }
 async function runSearch() {
   const ticket=++searchTicket;
@@ -231,7 +237,7 @@ async function runSearch() {
 }
 function updateCatalog() {const container=document.querySelector('#catalog-results');if(container)container.innerHTML=catalogResults();}
 async function browseSet(id,language) {
-  ++searchTicket;lang=language||lang;lastSetRequest={id,lang};query='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
+  ++searchTicket;lang=catalogueSetLanguage(language||lang);lastSetRequest={id,lang};query='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
   const ticket=searchTicket;
   try {const data=await getSet(id,lang);if(ticket!==searchTicket)return;setView=data;searchResults=data.cards.map(c=>({...c,lang,setName:data.name}));}
   catch(error){if(ticket!==searchTicket)return;searchError=error.message;}
@@ -593,7 +599,7 @@ document.addEventListener('change',event=>{
   if(event.target.id==='binder-filter'){binderFilter=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
   if(event.target.id==='kind-filter'){kindFilter=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
   if(event.target.id==='sort'){sort=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
-  if(event.target.id==='catalog-lang'){lang=event.target.value;query=document.querySelector('#catalog-query').value.trim();try{localStorage.setItem('pocketvault.lang',lang);}catch{}searchPage=1;runSearch();}
+  if(event.target.id==='catalog-lang'){lang=catalogueLanguage(event.target.value);event.target.value=lang;query=document.querySelector('#catalog-query').value.trim();try{localStorage.setItem('pocketvault.lang',lang);}catch{}searchPage=1;runSearch();}
   if(event.target.id==='import-file'){readImport(event.target.files[0]);event.target.value='';}
 });
 document.addEventListener('keydown',event=>{
