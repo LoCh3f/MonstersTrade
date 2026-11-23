@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c0d13">
+  <meta name="description" content="A home for every card. Track your Pokémon collection, discover cards, build your wishlist and follow your sets. Free, with no account required.">
+  <title>PocketVault — Your collection, together</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div id="app"><div class="boot"><img src="./favicon.svg" width="48" height="48" alt=""><p>Opening your vault…</p></div></div>
+  <dialog id="modal" aria-labelledby="modal-title"></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input id="import-file" type="file" accept=".json,.csv,application/json,text/csv" hidden>
+  <noscript>PocketVault needs JavaScript to manage your collection. Please enable it in your browser.</noscript>
+</body>
+</html>
