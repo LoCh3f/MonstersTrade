@@ -114,7 +114,7 @@ test('choosing Japanese keeps name search in view and opens the selected printin
   assert.match(details, /id="modal-title">Charizard ex</);
   assert.match(details, /#201 · Japanese/);
   assert.match(details, /Add to collection/);
-  assert.ok(requests.includes('https://api.tcgdex.net/v2/ja/cards/SV2a-201'));
+  assert.ok(requests.some(url => url === 'https://api.tcgdex.net/v2/ja/cards/SV2a-201'));
 });
 
 test('set browsing shows identifying codes when a Japanese title has no translation', async t => {
