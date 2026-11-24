@@ -112,7 +112,8 @@ A failed deployment or post-deployment health check needs investigation before r
 
 ## Features
 
-- Search the public Pokémon catalogue in English or Italian; track quantities, per-card purchase costs, condition, and binders.
+- Search by name or catalogue card ID and browse sets in English, Italian, Japanese, Korean, Traditional Chinese, Simplified Chinese, Thai, and Indonesian. Card details and images vary by language and depend on [TCGdex coverage](https://tcgdex.dev/status).
+- Use English, Italian, or romanized Japanese Pokémon names in the Asian catalogues. For example, choose Japanese and search for `Pikachu SV2a` or `Charizard ex 151`. Results show a Latin-script Pokémon name when available alongside the original printed title. Common Japanese Trainer and Basic Energy cards also have English and Italian search aliases.
 - Search sealed products by name, set and type: booster packs, booster boxes, Elite Trainer Boxes, collections, tins, blisters and bundles. Track quantities as whole sealed products, with per-product costs and packaging condition. Filter cards and sealed holdings separately in the collection.
 - Add custom sealed products with edition, language, product code and source link. Record dated personal valuations and review their local history, including multiple observations on the same day.
 - Record the exact catalogue variant where available, including finishes and special prints. Different variants, grading records, and personal valuation evidence remain separate entries.
@@ -121,12 +122,15 @@ A failed deployment or post-deployment health check needs investigation before r
 - View price source, provider date, last acquisition/attempt, and missing, stale, failed, or unverified states. A generic market reference remains labelled as such.
 - Refresh collection and wishlist references, with automatic refresh when returning to the app as needed. The shared cache prevents the manual button from repeatedly fetching the same provider data.
 - View shared per-card reference history and local aggregate collection snapshots. Coverage shows how many holdings have prices, personal valuations, old references, or no usable quote.
-- Save wishlist targets, organize binders, and track set progress by distinct card IDs.
+- Filter holdings by type, language, set, binder or valuation status. Compare estimated value with purchase cost in the filtered collection and move selected entries between binders together.
+- Save wishlist targets and track set progress by language and distinct card IDs.
 - Export collection rows to CSV or the complete local state to JSON. CSV merges rows; JSON restore replaces local collection, wishlist, binders, and aggregate history after a preview. Imports and removals offer a temporary undo action until another change is saved.
 
 ## How prices are handled
 
-Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). The shared service requests canonical English card records from TCGdex and stores Cardmarket EUR reference prices. Catalogue language and the language of a physical card do **not** establish that the market quote is language-specific. TCGdex documents daily Cardmarket updates; repeated requests do not imply a newer price. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
+Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). The price service uses canonical English records for the Western catalogue and the selected Asian catalogue for Asian editions. Cache and history entries are scoped by Asian catalogue language, even when two languages share a TCGdex card ID. A Cardmarket product can aggregate several languages. Asian cards use a personal valuation for the collection total and keep the marketplace figures visible for comparison. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
+
+When provided, the detail view shows Cardmarket's marketplace low and 7- and 30-day averages in EUR, alongside TCGplayer market benchmarks by finish in USD. The EUR trend is the public history series. USD benchmarks and the additional EUR metrics are displayed in the detail view and do not contribute to collection totals.
 
 The default generic reference is the positive, finite EUR `pricing.cardmarket.trend`. A price observation records source, metric, product ID, provider timestamp, fetch/attempt timestamps, and mapping status. References older than 48 hours are labelled stale. Failed refreshes keep the prior observation and report the failure; a successful response with no usable price leaves the current price unavailable and keeps the prior valid observation separately in the browser. Late responses cannot silently replace a newer observation.
 
@@ -171,7 +175,7 @@ The Worker exposes read-only public endpoints:
 - `GET /api/sealed/<sealed-product-id>`
 - `GET /api/sealed/<sealed-product-id>/history?days=90`
 
-The price store contains catalogue IDs, normalized public quotations, refresh bookkeeping, and public historical observations. It has no account, personal collection, quantity, purchase cost, or personal-valuation tables. Browser price requests identify public cards or sealed products; card catalogue searches and metadata requests still go directly to TCGdex. Sealed catalogue queries go to this app's Worker.
+Both card price endpoints accept `lang=ja`, `ko`, `zh-tw`, `zh-cn`, `th`, or `id` for the corresponding Asian catalogue. An omitted language uses the canonical English endpoint. The price store contains public catalogue IDs, quotations, refresh bookkeeping, and historical observations. Card catalogue searches and metadata requests go directly to TCGdex. The Worker handles sealed catalogue queries.
 
 Defaults in `wrangler.jsonc`:
 
@@ -205,3 +209,5 @@ This version has no application accounts, cloud collection synchronization, team
 The Monstertrade name and blue-and-orange logo were supplied by the app owner. The original logo is bundled at `dist/assets/monstertrade-logo.jpg`. Free access to the app is not a source-code license and does not grant permission to redistribute the logo, card artwork, or product photography. No project source license has been selected yet.
 
 TCGdex's [card database](https://github.com/tcgdex/cards-database) is MIT licensed. Pokémon names, card artwork, and related marks belong to their respective rights holders; the database license does not transfer ownership of those assets. Monstertrade is independent of DarkDex, Nintendo, The Pokémon Company, and TCGdex. No DarkDex application source or branded artwork is bundled.
+
+The browser's cross-language species lookup uses [PokéAPI species names](https://github.com/PokeAPI/pokeapi/blob/de6760be38b60a3024f1d9054330ff265f0dc619/data/v2/csv/pokemon_species_names.csv). The [PokéAPI license](dist/POKEAPI-LICENSE.txt) is included with the app.

@@ -10,6 +10,17 @@ const valuation = (amount = 250) => ({ amount, currency: 'EUR', updatedAt: date,
 const bundle = (overrides = {}) => ({ cardId: 'sv03.5-199', reference: reference(), variants: [], fetchedAt: date, lastAttemptAt: date, lastError: null, ...overrides });
 const option = (id, mapping = 'matched') => ({ id, label: id === 'reverse' ? 'Reverse holo' : 'Normal', type: id, stamp: [], foil: null, quote: reference({ amount: id === 'reverse' ? 180 : 100, mapping }) });
 
+test('a familiar Pokémon title survives browser normalization and CSV round trips', () => {
+  const state = addCard(emptyState(), card({
+    id: 'SV2a-201', name: 'リザードンex', pokemonName: 'Charizard', localId: '201', setId: 'SV2a', lang: 'ja',
+  }));
+  const restored = importCSV(exportCSV(normalizeState(state)));
+  const [saved] = restored.collection;
+  assert.equal(saved.name, 'リザードンex');
+  assert.equal(saved.pokemonName, 'Charizard');
+  assert.equal(saved.lang, 'ja');
+});
+
 test('v1 migrates without guessing variants or changing IDs, quantities, weighted costs and history', () => {
   const legacy = {
     version: 1,
@@ -80,6 +91,19 @@ test('selected variants require a matching verified quote; unrelated reference i
   assert.equal(absent.market.amount, null);
   assert.equal(effectivePrice(absent), null);
   assert.throws(() => applyMarketUpdate(original, bundle({ cardId: 'base1-4' })), /different card/);
+});
+
+test('Asian holdings retain marketplace evidence and require their own portfolio valuation', () => {
+  const asian = entry({ lang: 'ja' });
+  assert.throws(() => applyMarketUpdate(asian, bundle()), /different catalogue language/);
+  const refreshed = applyMarketUpdate(asian, bundle({ catalogueLanguage: 'ja', reference: reference({ amount: 35 }) }));
+  assert.equal(refreshed.market.amount, 35);
+  assert.equal(effectivePrice(refreshed), null);
+  assert.equal(effectivePrice({ ...refreshed, manualValuation: valuation(30) }), 30);
+  const roundTrip = normalizeState({ ...emptyState(), collection: [refreshed] }).collection[0];
+  assert.equal(roundTrip.lang, 'ja');
+  assert.equal(roundTrip.uid, asian.uid);
+  assert.equal(roundTrip.market.amount, 35);
 });
 
 test('missing quote and failed request retain old evidence without inventing a fresh source date', () => {

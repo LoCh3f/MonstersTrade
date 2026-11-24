@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 let fixtureId = 0;
 // Exercise the real event handlers and both HTML assignments without a browser
 // dependency. The browser smoke separately checks that this output stays text.
-async function application(t) {
+async function application(t, catalogueResponse = () => undefined) {
   const handlers = new Map(), nodes = new Map(), stored = new Map(), requests = [];
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, { innerHTML: '', value: '', open: false, classList: { add() {}, remove() {} },
@@ -22,7 +22,7 @@ async function application(t) {
       const path = String(url); requests.push(path);
       const cards = [{ id: 'base1-4', name: 'Synthetic card', localId: '4' }];
       const value = path === '/api/health' ? { configured: false } : path === './featured.json' ? []
-        : path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards;
+        : catalogueResponse(path) ?? (path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards);
       return Response.json(value);
     },
     setTimeout: () => 0,
@@ -33,7 +33,11 @@ async function application(t) {
     t.after(() => { if (previous) Object.defineProperty(globalThis, name, previous); else delete globalThis[name]; });
   }
   const url = new URL('../dist/app.js', import.meta.url);
-  const source = (await readFile(url, 'utf8')).replace(/from '(\.\/[^']+)'/g, (_match, relative) => `from '${new URL(relative, url).href}'`);
+  const source = (await readFile(url, 'utf8')).replace(/from '(\.\/[^']+)'/g, (_match, relative) => {
+    const module = new URL(relative, url);
+    if (relative === './catalog.js') module.searchParams.set('fixture', fixtureId);
+    return `from '${module.href}'`;
+  });
   const app = await import('data:text/javascript;base64,' + Buffer.from(source + `
     export const testState = () => ({ lang, query });
     export function renderLanguage(value) { lang=value; query='Synthetic'; searching=false; searchResults=[{id:'base1-4',name:'Synthetic'}]; render(); updateCatalog(); }
@@ -80,4 +84,51 @@ test('both catalogue HTML sinks encode the language label even if state is corru
     assert.ok(html.includes('&lt;IMG SRC=X ONERROR=ALERT(1)&gt;'));
     assert.equal(html.includes(payload.toUpperCase()), false);
   }
+});
+
+test('choosing Japanese keeps name search in view and opens the selected printing by its number', async t => {
+  const charizard = { id: 'SV2a-201', name: 'リザードンex', localId: '201' };
+  const set = { id: 'SV2a', name: 'ポケモンカード151', cardCount: { total: 210 } };
+  const { app, handlers, node, requests } = await application(t, path => {
+    if (path.endsWith('/ja/sets')) return [set];
+    if (path.endsWith('/ja/cards/SV2a-201')) return { ...charizard, dexId: [6], set, rarity: 'Special Art Rare' };
+    if (path.includes('/ja/cards?')) return [{ ...charizard, id: 'SV2a-006', localId: '006' }, charizard];
+  });
+  handlers.get('change')({ target: { id: 'catalog-lang', value: 'ja' } });
+  assert.equal(app.testState().lang, 'ja');
+  assert.match(node('#app').innerHTML, /Printing language/);
+  assert.match(node('#catalog-results').innerHTML, /Find Japanese printings/);
+  assert.equal(requests.some(url => url.includes('/ja/sets')), false);
+
+  node('#catalog-query').value = 'Charizard ex 151';
+  handlers.get('submit')({ target: { id: 'catalog-form' }, preventDefault() {} });
+  await new Promise(setImmediate);
+  const results = node('#catalog-results').innerHTML;
+  assert.match(results, /aria-label="View Charizard ex · SV2a · #006"/);
+  assert.match(results, /aria-label="View Charizard ex · SV2a · #201"/);
+  assert.match(results, /lang="ja">リザードンex/);
+  assert.match(results, /Pokémon Card 151/);
+
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { card: 'SV2a-201', lang: 'ja' } }) } });
+  const details = node('#modal').innerHTML;
+  assert.match(details, /id="modal-title">Charizard ex</);
+  assert.match(details, /#201 · Japanese/);
+  assert.match(details, /Add to collection/);
+  assert.ok(requests.includes('https://api.tcgdex.net/v2/ja/cards/SV2a-201'));
+});
+
+test('set browsing shows identifying codes when a Japanese title has no translation', async t => {
+  const set = { id: 'SV7a', name: '楽園ドラゴーナ' };
+  const card = { id: 'SV7a-060', name: 'ナイトストレッチャー', localId: '060' };
+  const { handlers, node } = await application(t, path => {
+    if (path.endsWith('/ja/sets')) return [set];
+    if (path.endsWith('/ja/sets/SV7a')) return { ...set, cards: [card] };
+  });
+  handlers.get('change')({ target: { id: 'catalog-lang', value: 'ja' } });
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { action: 'browse-catalogue-sets' } }) } });
+  assert.match(node('#catalog-results').innerHTML, /<h3>Set SV7a<\/h3><p lang="ja">楽園ドラゴーナ/);
+
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'SV7a', lang: 'ja' } }) } });
+  assert.match(node('#app').innerHTML, /class="card-name">Card #060</);
+  assert.match(node('#app').innerHTML, /lang="ja">ナイトストレッチャー/);
 });

@@ -1,5 +1,6 @@
 import { quoteStatus } from './pricing.js';
 import { safePhotoURL } from './photos.js';
+import { marketLanguage } from './languages.js';
 
 /** Immutable collection operations. Prices and purchase costs are per item, in EUR. */
 export const CONDITIONS = Object.freeze(['Near Mint', 'Excellent', 'Good', 'Played']);
@@ -19,7 +20,7 @@ const MAX_MONEY = 1e9;
 const MAX_QUANTITY = 1e6;
 const MAX_VALUATIONS = 1000;
 const JSON_COLUMNS = ['grading', 'manualValuation', 'market', 'lastValidMarket', 'variants', 'valuationHistory'];
-const CSV_COLUMNS = ['id', 'name', 'localId', 'image', 'setId', 'setName', 'setTotal', 'rarity', 'price', 'priceUpdated', 'lang', 'quantity', 'cost', 'condition', 'binderId', 'binderName', 'addedAt', 'variantId', 'variantLabel', 'kind', 'productType', 'edition', 'productCode', 'productUrl', 'sourceProductType', 'game', 'storesInStock', ...JSON_COLUMNS];
+const CSV_COLUMNS = ['id', 'name', 'localId', 'image', 'setId', 'setName', 'setTotal', 'rarity', 'price', 'priceUpdated', 'lang', 'quantity', 'cost', 'condition', 'binderId', 'binderName', 'addedAt', 'variantId', 'variantLabel', 'kind', 'productType', 'edition', 'productCode', 'productUrl', 'sourceProductType', 'game', 'storesInStock', ...JSON_COLUMNS, 'pokemonName'];
 const SNAPSHOT_REASONS = ['visit', 'collection', 'prices', 'legacy'];
 
 export function emptyState() {
@@ -202,6 +203,7 @@ function cardMetadata(input, legacy = false) {
     valuationHistory: sealed ? valuationHistory(input.valuationHistory, personal) : [],
     id: requiredText(input.id, 'Card ID'),
     name: requiredText(input.name, 'Card name', 300),
+    ...(!sealed && input.pokemonName ? { pokemonName: text(input.pokemonName, 'Pokémon name', '', 300) } : {}),
     localId: text(input.localId, 'Card number', '', 100),
     image,
     setId: text(input.setId, 'Set ID', '', 200),
@@ -367,6 +369,7 @@ export function updateEntry(state, uid, details = {}) {
 export function effectivePrice(entry) {
   if (entry.manualValuation) return number(entry.manualValuation.amount, 'Personal valuation');
   if (entry.grading) return null;
+  if (entry.kind !== 'sealed' && marketLanguage(entry.lang) !== 'en') return null;
   const market = entry.market || legacyQuote(entry);
   if (entry.kind === 'sealed' && !usableSealedReference(entry, market)) return null;
   if (market.mapping === 'unverified' || (entry.variantId && market.mapping !== 'matched')) return null;
@@ -390,7 +393,7 @@ export function priceCoverage(state, now = Date.now()) {
     const market = entry.market || legacyQuote(entry);
     const status = quoteStatus(market, now);
     if (status === 'error') result.errorQuantity += count;
-    if (market.mapping === 'unverified' || entry.grading || (entry.variantId && market.mapping !== 'matched') || (entry.kind === 'sealed' && !usableSealedReference(entry, market)) || status === 'unverified') result.unverifiedQuantity += count;
+    if (market.mapping === 'unverified' || entry.grading || (entry.variantId && market.mapping !== 'matched') || (entry.kind === 'sealed' ? !usableSealedReference(entry, market) : marketLanguage(entry.lang) !== 'en') || status === 'unverified') result.unverifiedQuantity += count;
     if (value !== null) {
       result.marketValue += value * count;
       if (market.mapping === 'generic') result.genericQuantity += count;
@@ -407,6 +410,7 @@ export function applyMarketUpdate(entry, bundle) {
   if (entry.kind === 'sealed') fail('Card market updates cannot be applied to a sealed product.');
   object(bundle, 'Price response');
   if (bundle.cardId !== entry.id) fail('The price response belongs to a different card.');
+  if ((bundle.catalogueLanguage ?? 'en') !== marketLanguage(entry.lang)) fail('The price response belongs to a different catalogue language.');
   const old = entry.market ? quote(entry.market) : legacyQuote(entry);
   const attemptedAt = nullableTimestamp(bundle.lastAttemptAt || bundle.fetchedAt, 'Price attempt date');
   const oldAttempt = Date.parse(old.lastAttemptAt || old.fetchedAt);
@@ -478,7 +482,7 @@ export function totals(state) {
     result.quantity += entry.quantity;
     result.cost += entry.cost * entry.quantity;
     unique.add(`${entry.kind || 'card'}:${entry.lang}:${entry.id}`);
-    if (entry.kind !== 'sealed' && entry.setId) sets.add(entry.setId);
+    if (entry.kind !== 'sealed' && entry.setId) sets.add(`${entry.lang}:${entry.setId}`);
     const price = effectivePrice(entry);
     if (price !== null) {
       result.value += price * entry.quantity;
