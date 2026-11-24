@@ -79,6 +79,27 @@ test('persisted public cache survives reload and remains bounded', async t => {
   assert.equal(calls, 103);
 });
 
+test('localized quotes stay separate across simultaneous requests and cache reloads', async t => {
+  storage(t);
+  const api = await client();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests.push(url);
+    const language = new URL(url, 'https://example.test').searchParams.get('lang');
+    return response(language === 'ja'
+      ? bundle('SV2a-025', { catalogueLanguage: 'ja', reference: quote({ amount: 12 }) })
+      : bundle('sv2a-025'));
+  });
+  const [english, japanese] = await Promise.all([api.getPrices('sv2a-025'), api.getPrices('sv2a-025', { lang: 'ja' })]);
+  assert.equal(english.reference.amount, 0.14);
+  assert.equal(japanese.reference.amount, 12);
+  assert.equal(japanese.cardId, 'sv2a-025');
+  const reloaded = await client();
+  assert.equal((await reloaded.getPrices('SV2a-025', { lang: 'ja' })).cardId, 'SV2a-025');
+  assert.deepEqual(requests, ['/api/prices/sv2a-025', '/api/prices/sv2a-025?lang=ja']);
+  await assert.rejects(reloaded.getPrices('sv2a-025', { lang: 'ko' }), /mismatched card details/);
+});
+
 test('broken or unavailable browser storage does not break price requests', async t => {
   storage(t, { 'pocketvault.prices.v1': '{not-json' });
   const api = await client();

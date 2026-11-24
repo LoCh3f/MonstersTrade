@@ -26,6 +26,22 @@ const stagingRaw = () => ({
   },
 });
 const stagingDatabases = () => ({ CLOUDFLARE_DATABASE_ID: id, CLOUDFLARE_STAGING_DATABASE_ID: stagingId });
+const expectedSha = 'a'.repeat(40);
+
+test('deployment injects only a validated revision and overrides checked-in identity claims', () => {
+  for (const args of [[], ['--staging']]) {
+    const source = stagingRaw();
+    source.vars.DEPLOY_COMMIT = 'untrusted-config-value';
+    source.env.staging.vars.DEPLOY_COMMIT = 'untrusted-staging-value';
+    const plan = deploymentPlan(source, { ...stagingDatabases(), DEPLOY_SHA: expectedSha.toUpperCase() }, args);
+    assert.equal(plan.config.vars.DEPLOY_COMMIT, expectedSha);
+    assert.equal(deploymentPlan(source, stagingDatabases(), args).config.vars.DEPLOY_COMMIT, undefined);
+    assert.equal(source.vars.DEPLOY_COMMIT, 'untrusted-config-value');
+    for (const invalid of ['', 'main', 'a'.repeat(39), `${expectedSha}\n`]) {
+      assert.throws(() => deploymentPlan(source, { ...stagingDatabases(), DEPLOY_SHA: invalid }, args), /full 40-character/);
+    }
+  }
+});
 
 test('deployment rejects placeholders, invalid account IDs and unknown options before commands run', () => {
   assert.throws(() => deploymentPlan(raw()), /real PRICES_DB/);
@@ -161,6 +177,20 @@ const stagingReleaseEnv = () => {
   return { ...env, ...stagingDatabases(), DEPLOY_TARGET: 'staging', MONSTERTRADE_STAGING_URL: 'https://staging.monstertrade.example' };
 };
 
+test('deployment cannot fall back to the legacy repository credential when an environment token is absent', async () => {
+  const workflow = readFileSync(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8');
+  const mappings = [...workflow.matchAll(/^\s+CLOUDFLARE_API_TOKEN:\s*(.+)$/gm)];
+  assert.ok(mappings.length > 0, 'Wrangler must receive its environment token explicitly');
+  for (const [, expression] of mappings) assert.equal(expression, '${{ secrets.CLOUDFLARE_DEPLOY_TOKEN }}');
+  assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN\b/);
+  for (const env of [releaseEnv(), stagingReleaseEnv()]) {
+    const target = env.DEPLOY_TARGET || 'production';
+    await assert.rejects(checkRelease({ ...env, CLOUDFLARE_API_TOKEN: '' }, {
+      rawConfig: stagingRaw(), fetchImpl: async () => assert.fail('Missing environment token must fail before network access'),
+    }), new RegExp(`Set CLOUDFLARE_DEPLOY_TOKEN in the ${target} GitHub environment`));
+  }
+});
+
 test('release gate rejects missing configuration and invalid identities before any network call', async () => {
   const fetchImpl = async () => { assert.fail('Invalid configuration must not contact GitHub'); };
   for (const key of Object.keys(releaseEnv())) {
@@ -238,6 +268,7 @@ test('production health retries temporary failures and requires both database sc
   let attempts = 0;
   const pauses = [];
   const health = await checkProduction('https://monstertrade.example', {
+    expectedSha,
     wait: async ms => pauses.push(ms),
     fetchImpl: async (url, options) => {
       assert.equal(url.href, 'https://monstertrade.example/api/health');
@@ -245,7 +276,7 @@ test('production health retries temporary failures and requires both database sc
       assert.ok(options.signal instanceof AbortSignal);
       attempts++;
       if (attempts === 1) return new Response('', { status: 503 });
-      return Response.json({ service: 'public-prices', configured: true, sealedConfigured: attempts >= 3 });
+      return Response.json({ service: 'public-prices', configured: true, sealedConfigured: attempts >= 3, deployCommit: expectedSha });
     },
   });
   assert.equal(attempts, 3);
@@ -254,9 +285,28 @@ test('production health retries temporary failures and requires both database sc
 
   attempts = 0; pauses.length = 0;
   await assert.rejects(checkProduction('https://monstertrade.example', {
+    expectedSha,
     wait: async ms => pauses.push(ms),
     fetchImpl: async () => { attempts++; return Response.json({ service: 'other-app', configured: true, sealedConfigured: true }); },
   }), /not configured/);
   assert.equal(attempts, 5);
   assert.deepEqual(pauses, [5000, 5000, 5000, 5000]);
+});
+
+test('healthy old, missing, or malformed revisions cannot authorize release tagging', async () => {
+  for (const deployCommit of [undefined, null, 'b'.repeat(40), `${expectedSha}\n`]) {
+    let requests = 0;
+    await assert.rejects(checkProduction('https://monstertrade.example', {
+      expectedSha, wait: async () => {}, fetchImpl: async () => {
+        requests++;
+        return Response.json({ service: 'public-prices', configured: true, sealedConfigured: true, deployCommit });
+      },
+    }), /revision does not match/);
+    assert.equal(requests, 5);
+  }
+  for (const invalid of [undefined, '', 'main', `${expectedSha}\n`]) {
+    await assert.rejects(checkProduction('https://monstertrade.example', {
+      expectedSha: invalid, fetchImpl: async () => assert.fail('Invalid expected revision must not issue a request'),
+    }), /full 40-character/);
+  }
 });

@@ -7,7 +7,12 @@ export async function checkRelease(env = process.env, { fetchImpl = fetch, rawCo
   const target = env.DEPLOY_TARGET || 'production';
   if (!['production', 'staging'].includes(target)) throw new Error('DEPLOY_TARGET must be production or staging.');
   for (const name of ['GH_TOKEN', 'DEPLOY_SHA', 'GITHUB_REPOSITORY', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_DATABASE_ID']) {
-    if (!env[name]) throw new Error(`Missing ${name}. Configure the repository Actions secrets and variables documented in README.md.`);
+    if (!env[name]) {
+      const guidance = name === 'CLOUDFLARE_API_TOKEN'
+        ? `Set CLOUDFLARE_DEPLOY_TOKEN in the ${target} GitHub environment.`
+        : 'Configure the environment secrets and repository variables documented in README.md.';
+      throw new Error(`Missing ${name}. ${guidance}`);
+    }
   }
   if (target === 'staging' && !env.CLOUDFLARE_STAGING_DATABASE_ID) throw new Error('Missing CLOUDFLARE_STAGING_DATABASE_ID.');
   const urlSetting = target === 'staging' ? 'MONSTERTRADE_STAGING_URL' : 'MONSTERTRADE_URL';

@@ -13,6 +13,7 @@ function harness(t, options = {}) {
   sqlite.exec('PRAGMA foreign_keys = ON');
   sqlite.exec(readFileSync(new URL('../migrations/0001_public_prices.sql', import.meta.url), 'utf8'));
   sqlite.exec(readFileSync(new URL('../migrations/0002_active_price_catalogue.sql', import.meta.url), 'utf8'));
+  sqlite.exec(readFileSync(new URL('../migrations/0004_price_admission.sql', import.meta.url), 'utf8'));
   t.after(() => sqlite.close());
   const db = {
     prepare(sql) {
@@ -21,12 +22,13 @@ function harness(t, options = {}) {
         bind(...values) { params.push(...values); return this; },
         async first() { return sqlite.prepare(sql).get(...params) || null; },
         async all() { return { results: sqlite.prepare(sql).all(...params) }; },
-        async run() { const result = sqlite.prepare(sql).run(...params); return { meta: { changes: Number(result.changes) } }; },
+        runSync() { const result = sqlite.prepare(sql).run(...params); return { meta: { changes: Number(result.changes) } }; },
+        async run() { return this.runSync(); },
       };
     },
     async batch(statements) {
       sqlite.exec('BEGIN');
-      try { const result = []; for (const statement of statements) result.push(await statement.run()); sqlite.exec('COMMIT'); return result; }
+      try { const result = []; for (const statement of statements) result.push(statement.runSync()); sqlite.exec('COMMIT'); return result; }
       catch (error) { sqlite.exec('ROLLBACK'); throw error; }
     },
   };
@@ -67,6 +69,31 @@ test('re-reading old provider data does not fabricate a new daily observation', 
   assert.equal(history.points.length, 1);
   assert.equal(history.points[0].date, '2026-11-23');
   assert.equal(history.points[0].fetchedAt, new Date(START).toISOString());
+});
+
+test('Asian catalogue prices, observations and scheduled refreshes are scoped to their printing language', async t => {
+  const calls = [];
+  const h = harness(t, { provider: async url => {
+    const language = new URL(url).pathname.split('/')[2];
+    calls.push(language);
+    return Response.json(rawCard(language === 'en' ? 'sv2a-025' : 'SV2a-025', { en: 3, ja: 12, 'zh-tw': 15 }[language]));
+  } });
+  const path = '/api/prices/sv2a-025';
+  for (const [query, language, amount] of [['', 'en', 3], ['?lang=ja', 'ja', 12], ['?lang=zh-tw', 'zh-tw', 15]]) {
+    const latest = await (await h.request(path + query)).json();
+    assert.equal(latest.catalogueLanguage, language);
+    assert.equal(latest.reference.amount, amount);
+    const history = await (await h.request(path + '/history' + query)).json();
+    assert.equal(history.catalogueLanguage, language);
+    assert.deepEqual(history.points.map(point => point.amount), [amount]);
+  }
+  assert.equal((await h.request('/api/prices/SV2a-025?lang=ja')).status, 200);
+  assert.equal((await h.request(path + '?lang=xx')).status, 400);
+  assert.equal((await h.request(path + '?lang=ja&lang=ko')).status, 400);
+  assert.deepEqual(calls, ['en', 'ja', 'zh-tw']);
+  h.setTime(START + DAY + 1);
+  assert.equal((await refreshScheduled(h.env, h.deps)).refreshed, 3);
+  assert.deepEqual(calls.slice(3).sort(), ['en', 'ja', 'zh-tw']);
 });
 
 test('provider failures keep the previous quote and respect Retry-After/cooldown', async t => {
@@ -126,9 +153,9 @@ test('admission and global upstream budgets are enforced before provider calls',
   const exhausted = await h.request('/api/prices/base1-4');
   assert.equal(exhausted.status, 429);
   assert.ok(Number(exhausted.headers.get('Retry-After')) > 0);
-  assert.equal((await h.request('/api/prices/base1-5')).status, 503);
+  assert.equal((await h.request('/api/prices/base1-5')).status, 429);
   assert.equal(h.calls(), 1);
-  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS count FROM price_cards').get().count, 2);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS count FROM price_cards').get().count, 1);
 });
 
 test('scheduler only refreshes bounded due, recently requested public cards', async t => {
@@ -292,6 +319,88 @@ test('health verifies all required tables and hides unmigrated database details'
   h.sqlite.exec('DROP TABLE price_history');
   const unready = await h.request('/api/health');
   assert.equal(unready.status, 503);
-  assert.deepEqual(await unready.json(), { configured: false, service: 'public-prices', retentionDays: 365, scope: 'public quotes only' });
+  assert.deepEqual(await unready.json(), { configured: false, service: 'public-prices', retentionDays: 365, scope: 'public quotes only', deployCommit: null });
   assert.equal(h.calls(), 0);
+});
+
+test('failed lookups beyond the former capacity keep bounded negatives and leave confirmed slots available', async t => {
+  const h = harness(t, { env: { MAX_TRACKED_CARDS: '2', MAX_UPSTREAM_REQUESTS_PER_DAY: '5000', MAX_NEW_CARD_REQUESTS_PER_DAY: '1000' },
+    provider: async url => url.includes('missing-') ? new Response(null, { status: 404 }) : Response.json(rawCard(url.split('/').at(-1))) });
+  for (let i = 0; i < 510; i++) assert.equal((await h.request('/api/prices/missing-' + i)).status, 404);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards WHERE payload IS NULL').get().n, 256);
+  assert.equal((await h.request('/api/prices/missing-509')).status, 503);
+  assert.equal(h.calls(), 510, 'negative cache avoids another provider acquisition');
+  assert.equal((await h.request('/api/prices/base1-1')).status, 200);
+  assert.equal((await h.request('/api/prices/base1-2')).status, 200);
+  assert.equal((await h.request('/api/prices/base1-3')).status, 503);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards WHERE payload IS NOT NULL').get().n, 2);
+});
+
+test('new-card failures cannot spend the reserved budget for confirmed refreshes', async t => {
+  const h = harness(t, { env: { MAX_UPSTREAM_REQUESTS_PER_DAY: '8' } });
+  await h.request();
+  h.setTime(START + DAY + 1);
+  h.setProvider(async url => url.includes('missing-') ? new Response(null, { status: 404 }) : Response.json(rawCard(url.split('/').at(-1), 18, '2026-11-24T02:00:00Z')));
+  assert.equal((await h.request('/api/prices/missing-one')).status, 404);
+  assert.equal((await h.request('/api/prices/missing-two')).status, 404);
+  assert.equal((await h.request('/api/prices/missing-three')).status, 429);
+  assert.equal((await (await h.request()).json()).reference.amount, 18);
+  assert.equal(h.sqlite.prepare("SELECT calls FROM upstream_budget WHERE day='2026-11-24'").get().calls, 3);
+  assert.equal(h.sqlite.prepare("SELECT calls FROM price_admission_budget WHERE day='2026-11-24'").get().calls, 2);
+});
+
+test('concurrent provisional cards cannot over-promote the confirmed capacity', async t => {
+  let release;
+  const barrier = new Promise(resolve => { release = resolve; });
+  const h = harness(t, { env: { MAX_TRACKED_CARDS: '1' }, provider: async url => {
+    await barrier; return Response.json(rawCard(url.split('/').at(-1)));
+  } });
+  const one = h.request('/api/prices/race-one'), two = h.request('/api/prices/race-two');
+  await new Promise(resolve => setTimeout(resolve, 0));
+  release();
+  assert.deepEqual((await Promise.all([one, two])).map(response => response.status).sort(), [200, 503]);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards WHERE payload IS NOT NULL').get().n, 1);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_history').get().n, 1);
+});
+
+test('rate limiting runs before database work, uses transient hashed keys and fails closed when required', async t => {
+  let key;
+  const h = harness(t, { env: { REQUIRE_RATE_LIMITERS: 'true', PUBLIC_API_RATE_LIMITER: { limit: async value => { key = value.key; return { success: false }; } }, PRICE_ADMISSION_RATE_LIMITER: { limit: async () => ({ success: true }) } } });
+  const denied = await h.request('/api/prices/base1-4', { headers: { 'CF-Connecting-IP': '192.0.2.10' } });
+  assert.equal(denied.status, 429); assert.equal(denied.headers.get('Retry-After'), '60');
+  assert.match(key, /^[a-f0-9]{64}$/); assert.ok(!key.includes('192.0.2.10'));
+  assert.equal(h.calls(), 0); assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards').get().n, 0);
+  delete h.env.PUBLIC_API_RATE_LIMITER;
+  assert.equal((await h.request()).status, 503);
+  assert.equal((await h.request('/api/health')).status, 503);
+});
+
+test('admission rate limits do not deny cached confirmed cards and separate clients share no key', async t => {
+  const seen = [];
+  let allow = true;
+  const h = harness(t, { env: { PRICE_ADMISSION_RATE_LIMITER: { limit: async ({ key }) => { seen.push(key); return { success: allow }; } } } });
+  assert.equal((await h.request('/api/prices/base1-4', { headers: { 'CF-Connecting-IP': '192.0.2.1' } })).status, 200);
+  allow = false;
+  assert.equal((await h.request('/api/prices/base1-4')).status, 200);
+  assert.equal((await h.request('/api/prices/base1-5', { headers: { 'CF-Connecting-IP': '192.0.2.2' } })).status, 429);
+  assert.equal(seen.length, 2); assert.notEqual(seen[0], seen[1]);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards').get().n, 1);
+});
+
+test('health exposes only a validated deployment commit', async t => {
+  const h = harness(t, { env: { DEPLOY_COMMIT: 'AB'.repeat(20) } });
+  assert.equal((await (await h.request('/api/health')).json()).deployCommit, 'ab'.repeat(20));
+  h.env.DEPLOY_COMMIT = 'secret-or-untrusted-environment-value';
+  assert.equal((await (await h.request('/api/health')).json()).deployCommit, null);
+});
+
+test('exhausted admission allowance rejects distinct IDs without further database writes', async t => {
+  const h = harness(t, { env: { MAX_UPSTREAM_REQUESTS_PER_DAY: '8' }, provider: async () => new Response(null, {status:404}) });
+  assert.equal((await h.request('/api/prices/missing-one')).status,404);
+  assert.equal((await h.request('/api/prices/missing-two')).status,404);
+  const before=h.sqlite.prepare('SELECT total_changes() AS n').get().n;
+  for(let i=0;i<100;i++)assert.equal((await h.request('/api/prices/exhausted-'+i)).status,429);
+  assert.equal(h.sqlite.prepare('SELECT total_changes() AS n').get().n,before);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM price_cards').get().n,2);
+  assert.equal(h.calls(),2);
 });

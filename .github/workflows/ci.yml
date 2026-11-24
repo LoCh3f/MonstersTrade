@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   git-flow:
+    # Keep the legacy check during rollout. Once main contains the trusted policy,
+    # the same-name commit status is required as well and cannot be replaced by this job.
     name: Git Flow
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -50,8 +52,10 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: npm
+      - name: Check locked dependencies for high and critical advisories
+        run: npm audit --package-lock-only --ignore-scripts --audit-level=high
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Check source and bundled assets
         run: npm run check
       - name: Run unit and regression tests
