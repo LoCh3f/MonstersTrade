@@ -63,11 +63,11 @@ test('catalogue language DOM input is canonical before rendering or requesting d
 
   await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'base1', lang: payload } }) } });
   assert.equal(app.testState().lang, 'en');
-  assert.ok(requests.includes('https://api.tcgdex.net/v2/en/sets/base1'));
+  assert.ok(requests.some(url => url === 'https://api.tcgdex.net/v2/en/sets/base1'));
   for (const language of ['ja', 'de']) {
     await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'base1', lang: language } }) } });
     assert.equal(app.testState().lang, language);
-    assert.ok(requests.includes(`https://api.tcgdex.net/v2/${language}/sets/base1`));
+    assert.ok(requests.some(url => url === `https://api.tcgdex.net/v2/${language}/sets/base1`));
   }
 });
 
