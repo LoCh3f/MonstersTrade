@@ -1,4 +1,6 @@
 /** TCGdex public catalogue. Market estimates are Cardmarket trends in EUR. */
+import { providerMarketComparison } from './pricing.js';
+
 const API = 'https://api.tcgdex.net/v2';
 const TIMEOUT_MS = 12_000;
 const CACHE_LIMIT = 180;
@@ -46,7 +48,7 @@ async function request(path, { force = false, ttl = 3_600_000 } = {}) {
     try {
       const response = await fetch(url, { signal: controller.signal, credentials: 'omit' });
       if (!response.ok) {
-        if (response.status === 404) throw new Error('This card or set is not available in the selected language. Try English or check its ID.');
+        if (response.status === 404) throw new Error('This card or set is not available in the selected language. Check its catalogue ID.');
         if (response.status === 429) throw new Error('The card catalogue is busy. Wait a moment before searching or refreshing again.');
         throw new Error(`The card catalogue is unavailable (HTTP ${response.status}). Please try again later.`);
       }
@@ -121,6 +123,7 @@ export function normalizeCard(raw, lang = 'en') {
     price,
     priceUpdated: price === null ? null : timestamp,
     priceSource: price === null ? null : 'Cardmarket trend · EUR',
+    comparison: providerMarketComparison(raw.pricing),
     variantOptions: variantOptions(raw),
     lang: language(lang),
   };
@@ -131,6 +134,7 @@ export async function searchCards(query, lang = 'en', page = 1) {
   if (!term) return [];
   const pageNumber = Number(page);
   if (!Number.isInteger(pageNumber) || pageNumber < 1) throw new Error('Choose a valid catalogue page.');
+  if (/^[a-z0-9.]+(?:-[a-z0-9.]+)*-\d+[a-z]?$/i.test(term)) return pageNumber === 1 ? [await getCard(term, lang)] : [];
   const params = new URLSearchParams({ name: term, 'pagination:page': String(pageNumber), 'pagination:itemsPerPage': '24' });
   const data = await request(`${language(lang)}/cards?${params}`, { ttl: 600_000 });
   if (!Array.isArray(data)) throw new Error('The catalogue could not return search results. Please try again.');

@@ -5,6 +5,34 @@ const MAX_VARIANTS = 32;
 const cleanText = (value, max = 240) => typeof value === 'string' ? value.trim().slice(0, max) : '';
 const timestamp = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const positive = value => typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 1e9 ? value : null;
+const CARDMARKET_INDICATORS = ['low', 'avg7', 'avg30'];
+const TCGPLAYER_FINISHES = ['normal', 'holo', 'reverse', 'first-edition', 'first-edition-holo', 'unlimited', 'unlimited-holo'];
+
+export function normalizeMarketComparison(value) {
+  const eur = value?.cardmarket;
+  const indicators = Object.fromEntries(CARDMARKET_INDICATORS.map(metric => [metric, positive(eur?.[metric])]));
+  const cardmarket = timestamp(eur?.updated) && Object.values(indicators).some(amount => amount !== null)
+    ? { ...indicators, updated: timestamp(eur.updated) } : null;
+  const usd = value?.tcgplayer;
+  const finishes = Object.fromEntries(TCGPLAYER_FINISHES.flatMap(finish => {
+    const amount = positive(usd?.finishes?.[finish]);
+    return amount === null ? [] : [[finish, amount]];
+  }));
+  const tcgplayer = timestamp(usd?.updated) && Object.keys(finishes).length
+    ? { finishes, updated: timestamp(usd.updated) } : null;
+  return { cardmarket, tcgplayer };
+}
+
+export function providerMarketComparison(pricing) {
+  const tcgplayer = pricing?.tcgplayer;
+  return normalizeMarketComparison({
+    cardmarket: pricing?.cardmarket?.unit === 'EUR' ? pricing.cardmarket : null,
+    tcgplayer: tcgplayer?.unit === 'USD' ? {
+      updated: tcgplayer.updated,
+      finishes: Object.fromEntries(TCGPLAYER_FINISHES.map(finish => [finish, tcgplayer[finish]?.marketPrice])),
+    } : null,
+  });
+}
 
 export function normalizeQuote(input = {}) {
   const value = input && typeof input === 'object' ? input : {};
@@ -76,6 +104,7 @@ export function normalizePricing(raw, nowISOString = new Date().toISOString()) {
   return {
     cardId: raw.id,
     reference: quoteFromMarket(raw.pricing?.cardmarket, now),
+    comparison: providerMarketComparison(raw.pricing),
     variants,
     fetchedAt: now, lastAttemptAt: now, lastError: null,
   };

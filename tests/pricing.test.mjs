@@ -33,6 +33,20 @@ test('freshness is based on provider time, not the latest fetch or a fabricated 
   assert.equal(quoteStatus({ ...quote, amount: null }, Date.parse(now)), 'missing');
 });
 
+test('marketplace comparisons preserve source currency and exclude missing or invalid metrics', () => {
+  const raw = card();
+  raw.pricing.cardmarket = { ...market, low: 0.02, avg7: 0.1, avg30: 0 };
+  raw.pricing.tcgplayer = { unit: 'USD', updated: market.updated, normal: { marketPrice: 2 }, reverse: { marketPrice: '4' } };
+  const normalized = normalizePricing(raw, now);
+  assert.equal(normalized.reference.amount, 0.16);
+  assert.deepEqual(normalized.comparison, {
+    cardmarket: { low: 0.02, avg7: 0.1, avg30: null, updated: '2026-11-23T02:00:00.000Z' },
+    tcgplayer: { finishes: { normal: 2 }, updated: '2026-11-23T02:00:00.000Z' },
+  });
+  raw.pricing.tcgplayer.unit = 'JPY';
+  assert.equal(normalizePricing(raw, now).comparison.tcgplayer, null);
+});
+
 test('ambiguous normal/reverse/holo prices never become verified based on IDs or nonzero fields', () => {
   const raw = card();
   raw.variants_detailed.push({ variantId: 'holo-only', type: 'holo', thirdParty: { cardmarket: 733601 }, pricing: { cardmarket: { ...market, idProduct: 733601, trend: 7.83, 'trend-holo': 0 } } });

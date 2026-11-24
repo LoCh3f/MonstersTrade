@@ -52,3 +52,25 @@ dialog:not(.modal-small){width:min(860px,calc(100vw - 32px))}.modal-columns{grid
 .stat-top svg{color:#8caedb}
 .boot img{height:auto;border-radius:15px}
 @media(max-width:620px){.breadcrumb strong,.breadcrumb>svg{display:none}.brand-wordmark{font-size:18px}.top-actions{gap:12px}.sidebar{padding-top:20px}.brand{max-width:180px;margin:0 auto;width:100%}}
+
+.card-art-fallback { display: none; }
+.art-unavailable > .card-art-fallback { display: inline-flex; }
+
+.price-market-heading, .market-history-heading { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: flex-start; }
+.price-market-heading h3 { font-size: 16px; margin-bottom: 4px; }
+.price-market-heading strong { font-variant-numeric: tabular-nums; margin: 4px 0 8px; }
+.market-estimate .quote-date { margin-bottom: 6px; }
+.market-comparison { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.market-comparison h4 { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; font-size: 12px; }
+.market-comparison h4 time { color: var(--muted); font-weight: 400; }
+.market-comparison dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(85px, 1fr)); gap: 8px; margin: 8px 0; }
+.market-comparison dl > div { border-radius: 6px; padding: 7px 8px; background: #ffffff06; min-width: 0; }
+.market-comparison dt { color: var(--muted); font-size: 11px; }
+.market-comparison dd { font-variant-numeric: tabular-nums; font-weight: 650; margin: 4px 0 0; overflow-wrap: anywhere; }
+.market-estimate .market-comparison-scope { margin-top: 10px; }
+.price-panel-actions { align-items: center; gap: 8px 14px; }
+.price-panel-actions a { margin: 0; }
+.market-provenance { margin-top: 10px; color: var(--muted); font-size: 12px; }
+.market-provenance summary { cursor: pointer; }
+.market-provenance .quote-details { margin-bottom: 0; }
+.market-history-heading { align-items: center; }

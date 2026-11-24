@@ -112,7 +112,7 @@ A failed deployment or post-deployment health check needs investigation before r
 
 ## Features
 
-- Search the public Pokémon catalogue in English or Italian; track quantities, per-card purchase costs, condition, and binders.
+- Search by name or catalogue card ID and browse sets in English, Italian, Japanese, Korean, Traditional Chinese, Simplified Chinese, Thai, and Indonesian. Card details and images vary by language and depend on [TCGdex coverage](https://tcgdex.dev/status).
 - Search sealed products by name, set and type: booster packs, booster boxes, Elite Trainer Boxes, collections, tins, blisters and bundles. Track quantities as whole sealed products, with per-product costs and packaging condition. Filter cards and sealed holdings separately in the collection.
 - Add custom sealed products with edition, language, product code and source link. Record dated personal valuations and review their local history, including multiple observations on the same day.
 - Record the exact catalogue variant where available, including finishes and special prints. Different variants, grading records, and personal valuation evidence remain separate entries.
@@ -126,7 +126,9 @@ A failed deployment or post-deployment health check needs investigation before r
 
 ## How prices are handled
 
-Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). The shared service requests canonical English card records from TCGdex and stores Cardmarket EUR reference prices. Catalogue language and the language of a physical card do **not** establish that the market quote is language-specific. TCGdex documents daily Cardmarket updates; repeated requests do not imply a newer price. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
+Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). The price service uses canonical English records for the Western catalogue and the selected Asian catalogue for Asian editions. Cache and history entries are scoped by Asian catalogue language, even when two languages share a TCGdex card ID. A Cardmarket product can aggregate several languages. Asian cards use a personal valuation for the collection total and keep the marketplace figures visible for comparison. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
+
+When provided, the detail view shows Cardmarket's marketplace low and 7- and 30-day averages in EUR, alongside TCGplayer market benchmarks by finish in USD. The EUR trend is the public history series. USD benchmarks and the additional EUR metrics are displayed in the detail view and do not contribute to collection totals.
 
 The default generic reference is the positive, finite EUR `pricing.cardmarket.trend`. A price observation records source, metric, product ID, provider timestamp, fetch/attempt timestamps, and mapping status. References older than 48 hours are labelled stale. Failed refreshes keep the prior observation and report the failure; a successful response with no usable price leaves the current price unavailable and keeps the prior valid observation separately in the browser. Late responses cannot silently replace a newer observation.
 
@@ -171,7 +173,7 @@ The Worker exposes read-only public endpoints:
 - `GET /api/sealed/<sealed-product-id>`
 - `GET /api/sealed/<sealed-product-id>/history?days=90`
 
-The price store contains catalogue IDs, normalized public quotations, refresh bookkeeping, and public historical observations. It has no account, personal collection, quantity, purchase cost, or personal-valuation tables. Browser price requests identify public cards or sealed products; card catalogue searches and metadata requests still go directly to TCGdex. Sealed catalogue queries go to this app's Worker.
+Both card price endpoints accept `lang=ja`, `ko`, `zh-tw`, `zh-cn`, `th`, or `id` for the corresponding Asian catalogue. An omitted language uses the canonical English endpoint. The price store contains public catalogue IDs, quotations, refresh bookkeeping, and historical observations. Card catalogue searches and metadata requests go directly to TCGdex. The Worker handles sealed catalogue queries.
 
 Defaults in `wrangler.jsonc`:
 

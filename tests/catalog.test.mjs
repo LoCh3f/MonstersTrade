@@ -135,6 +135,20 @@ test('set endpoints use the selected language and cached sets cannot be mutated 
   await assert.rejects(getSet('../secret'), /valid TCGdex/);
 });
 
+test('direct card ID search stays in the selected catalogue and preserves the returned identity', async t => {
+  const { searchCards } = await freshCatalog();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    requests.push(url);
+    return response({ id: 'SV2a-025', name: 'ピカチュウ', localId: '025', set: { id: 'SV2a', name: 'ポケモンカード151' } });
+  });
+  const [result] = await searchCards('sv2a-025', 'ja');
+  assert.equal(result.id, 'SV2a-025');
+  assert.equal(result.lang, 'ja');
+  assert.deepEqual(await searchCards('sv2a-025', 'ja', 2), []);
+  assert.deepEqual(requests, ['https://api.tcgdex.net/v2/ja/cards/sv2a-025']);
+});
+
 test('network and provider failures have actionable messages and can be retried', async t => {
   const { getCard } = await freshCatalog();
   let status = 404;

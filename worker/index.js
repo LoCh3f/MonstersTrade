@@ -1,4 +1,5 @@
 import { normalizePricing, normalizeQuote } from '../dist/pricing.js';
+import { marketCardKey, marketLanguage } from '../dist/languages.js';
 import { handleSealedRequest, refreshSealedScheduled } from './sealed.js';
 import { checkRateLimit, deployCommit, operationalEvent, rateLimitsReady } from './security.js';
 
@@ -89,12 +90,14 @@ function retryAfterSeconds(response, now) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds, 7 * 86400) : null;
 }
 
-async function providerCard(id, now, fetchImpl) {
+async function providerCard(key, now, fetchImpl) {
+  const separator = key.indexOf(':');
+  const language = separator === -1 ? 'en' : key.slice(0, separator);
+  const id = key.slice(separator + 1);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT);
   try {
-    // Canonical English identifiers/variant labels only; prices are market-wide.
-    const response = await fetchImpl(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(id)}`, {
+    const response = await fetchImpl(`https://api.tcgdex.net/v2/${language}/cards/${encodeURIComponent(id)}`, {
       signal: controller.signal, redirect: 'manual', headers: { Accept: 'application/json' },
     });
     if (!response.ok) {
@@ -124,8 +127,8 @@ async function providerCard(id, now, fetchImpl) {
     let data;
     try { data = JSON.parse(new TextDecoder().decode(body)); }
     catch { throw new PublicError('The provider returned unreadable price data.'); }
-    if (data.id !== id) throw new PublicError('The provider returned a different card. No prices were changed.');
-    return normalizePricing(data, iso(now));
+    if (typeof data?.id !== 'string' || marketCardKey(data.id, language) !== key) throw new PublicError('The provider returned a different card. No prices were changed.');
+    return { ...normalizePricing(data, iso(now)), catalogueLanguage: language };
   } catch (error) {
     if (error instanceof PublicError) throw error;
     throw new PublicError(controller.signal.aborted ? 'The price provider timed out. A later retry is scheduled.' : 'The price provider could not be reached.');
@@ -133,7 +136,7 @@ async function providerCard(id, now, fetchImpl) {
 }
 
 /** One row per real provider date. Re-reading yesterday's quote never fabricates today's history. */
-function observationStatements(db, bundle, now) {
+function observationStatements(db, key, bundle, now) {
   const values = [['generic', bundle.reference], ...bundle.variants.map(variant => [variant.id, variant.quote])];
   return values.flatMap(([variantId, quote]) => {
     const updated = Date.parse(quote.providerUpdatedAt || '');
@@ -148,7 +151,7 @@ function observationStatements(db, bundle, now) {
         amount = excluded.amount, metric = excluded.metric, product_id = excluded.product_id,
         provider_updated_at = excluded.provider_updated_at, fetched_at = excluded.fetched_at, mapping = excluded.mapping
       WHERE excluded.provider_updated_at > price_history.provider_updated_at`)
-      .bind(bundle.cardId, variantId, date, quote.amount, quote.metric, quote.productId, quote.providerUpdatedAt, bundle.fetchedAt, quote.mapping)];
+      .bind(key, variantId, date, quote.amount, quote.metric, quote.productId, quote.providerUpdatedAt, bundle.fetchedAt, quote.mapping)];
   });
 }
 
@@ -190,6 +193,12 @@ async function refreshCard(db, id, env, fetchImpl, now) {
         return fresh;
       };
       bundle.reference = retainNewer(previous.reference, bundle.reference);
+      if (Date.parse(previous.comparison?.cardmarket?.updated) > Date.parse(bundle.comparison.cardmarket?.updated)) {
+        bundle.comparison.cardmarket = previous.comparison.cardmarket;
+      }
+      if (Date.parse(previous.comparison?.tcgplayer?.updated) > Date.parse(bundle.comparison.tcgplayer?.updated)) {
+        bundle.comparison.tcgplayer = previous.comparison.tcgplayer;
+      }
       bundle.variants = bundle.variants.map(variant => ({ ...variant, quote: retainNewer(previous.variants.find(old => old.id === variant.id)?.quote, variant.quote) }));
     }
     const store = db.prepare(`UPDATE price_cards SET payload = ?2, next_refresh_at = ?3,
@@ -198,7 +207,7 @@ async function refreshCard(db, id, env, fetchImpl, now) {
         (SELECT COUNT(*) FROM price_cards WHERE payload IS NOT NULL AND last_requested_at >= ?6) < ?7)`)
       .bind(id, JSON.stringify(bundle), iso(now + TTL), start, lease, iso(now - 30 * DAY), limits.tracked);
     // The lease remains valid for 60s; provider requests abort after 12s. A single batch commits latest + history atomically.
-    const result = await db.batch([store, ...observationStatements(db, bundle, now)]);
+    const result = await db.batch([store, ...observationStatements(db, id, bundle, now)]);
     if (!result[0]?.meta?.changes) {
       const latest = await db.prepare('SELECT lease_until FROM price_cards WHERE card_id = ?').bind(id).first();
       if (latest?.lease_until !== lease) return null;
@@ -271,13 +280,16 @@ export async function handleRequest(request, env, context = {}, dependencies = {
   let id;
   try { id = decodeURIComponent(match[1]); } catch { return json({ error: 'Invalid card identifier.' }, 400); }
   if (!validId(id)) return json({ error: 'Invalid card identifier.' }, 400);
+  const language = url.searchParams.get('lang') ?? 'en';
+  if (marketLanguage(language) !== language || url.searchParams.getAll('lang').length > 1) return json({ error: 'Unsupported price catalogue language.' }, 400);
+  const key = marketCardKey(id, language);
   if (!env.PRICES_DB) return json({ error: 'The shared price service is not configured yet.' }, 503);
   if (request.method === 'HEAD') return new Response(null, { status: 200, headers: { 'Cache-Control': 'no-store' } });
   const now = dependencies.now?.() ?? Date.now();
   const db = env.PRICES_DB;
   try {
     if (match[2]) {
-      if ([...url.searchParams.keys()].some(key => !['variant', 'days'].includes(key))) throw new PublicError('Unsupported history parameter.', 400, null);
+      if ([...url.searchParams.keys()].some(key => !['variant', 'days', 'lang'].includes(key))) throw new PublicError('Unsupported history parameter.', 400, null);
       const variantId = url.searchParams.get('variant') || 'generic';
       const daysText = url.searchParams.get('days') || '90';
       if (!VARIANT_PATTERN.test(variantId) || !/^\d+$/.test(daysText) || Number(daysText) < 1 || Number(daysText) > RETENTION_DAYS) throw new PublicError('Choose a valid variant and 1–365 history days.', 400, null);
@@ -285,11 +297,11 @@ export async function handleRequest(request, env, context = {}, dependencies = {
       const result = await db.prepare(`SELECT date, amount, provider_updated_at AS providerUpdatedAt,
         fetched_at AS fetchedAt, mapping, metric, product_id AS productId FROM price_history
         WHERE card_id = ?1 AND variant_id = ?2 AND date >= ?3 AND date <= ?4 ORDER BY date LIMIT 365`)
-        .bind(id, variantId, cutoff, iso(now).slice(0, 10)).all();
-      return json({ cardId: id, variantId, points: result.results || [], retentionDays: RETENTION_DAYS, dateBasis: 'provider', currency: 'EUR' }, 200, { 'Cache-Control': 'public, max-age=300' });
+        .bind(key, variantId, cutoff, iso(now).slice(0, 10)).all();
+      return json({ cardId: id, catalogueLanguage: language, variantId, points: result.results || [], retentionDays: RETENTION_DAYS, dateBasis: 'provider', currency: 'EUR' }, 200, { 'Cache-Control': 'public, max-age=300' });
     }
-    if ([...url.searchParams.keys()].some(key => key !== 'refresh') || (url.searchParams.has('refresh') && url.searchParams.get('refresh') !== '1')) throw new PublicError('Unsupported price parameter.', 400, null);
-    const bundle = await currentPrice(db, id, env, dependencies.fetch || fetch, now, async () => {
+    if ([...url.searchParams.keys()].some(key => !['refresh', 'lang'].includes(key)) || (url.searchParams.has('refresh') && url.searchParams.get('refresh') !== '1')) throw new PublicError('Unsupported price parameter.', 400, null);
+    const bundle = await currentPrice(db, key, env, dependencies.fetch || fetch, now, async () => {
       const limited = await checkRateLimit(request, env, 'PRICE_ADMISSION_RATE_LIMITER');
       if (limited) throw new PublicError((await limited.json()).error, limited.status, 60);
       // A read-only preflight prevents fresh IDs from churning provisional rows

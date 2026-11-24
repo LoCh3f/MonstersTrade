@@ -1,4 +1,5 @@
-import { normalizeQuote } from './pricing.js';
+import { normalizeMarketComparison, normalizeQuote } from './pricing.js';
+import { marketCardKey, marketLanguage } from './languages.js';
 
 // This cache contains public quotations only. Personal collection fields never
 // cross this module's network boundary.
@@ -49,8 +50,13 @@ function quote(value) {
   });
 }
 
-function bundle(value, expectedId) {
-  if (!value || value.cardId !== expectedId || !Array.isArray(value.variants) || value.variants.length > 32) {
+function matchesCard(value, cardId, language) {
+  return typeof value?.cardId === 'string' && (value.catalogueLanguage ?? 'en') === language
+    && marketCardKey(value.cardId, language) === marketCardKey(cardId, language);
+}
+
+function bundle(value, expectedId, language) {
+  if (!matchesCard(value, expectedId, language) || !Array.isArray(value.variants) || value.variants.length > 32) {
     throw new Error('The price service returned mismatched card details.');
   }
   const seen = new Set();
@@ -66,7 +72,8 @@ function bundle(value, expectedId) {
     };
   });
   return {
-    cardId: expectedId, reference: quote(value.reference), variants,
+    cardId: expectedId, catalogueLanguage: language, reference: quote(value.reference), variants,
+    comparison: normalizeMarketComparison(value.comparison),
     fetchedAt: date(value.fetchedAt), lastAttemptAt: date(value.lastAttemptAt),
     lastError: text(value.lastError, 300) || null,
   };
@@ -81,8 +88,9 @@ function loadCache() {
     for (const entry of stored.entries.slice(-CACHE_LIMIT)) {
       try {
         const cardId = id(entry.cardId);
+        const language = marketLanguage(entry.value?.catalogueLanguage);
         if (!Number.isFinite(entry.savedAt) || entry.savedAt > Date.now() + 60_000) continue;
-        cache.set(cardId, { value: bundle(entry.value, cardId), savedAt: entry.savedAt });
+        cache.set(marketCardKey(cardId, language), { value: bundle(entry.value, cardId, language), savedAt: entry.savedAt });
       } catch { /* One invalid cache record must not hide the other records. */ }
     }
   } catch { /* Restricted/quota-limited browser storage does not disable prices. */ }
@@ -90,7 +98,7 @@ function loadCache() {
 
 function persistCache() {
   try {
-    let entries = [...cache].map(([cardId, stored]) => ({ cardId, ...stored }));
+    let entries = [...cache.values()].map(stored => ({ cardId: stored.value.cardId, ...stored }));
     let serialized = JSON.stringify({ version: 1, entries });
     while (serialized.length > CACHE_BYTES && entries.length) {
       entries.shift();
@@ -183,20 +191,26 @@ function checkedBundle(value, checkedAt) {
 }
 
 /** Fetches only public prices for an identifier; never accepts collection rows. */
-export async function getPrices(cardId, { force = false } = {}) {
+export async function getPrices(cardId, { force = false, lang = 'en' } = {}) {
   cardId = id(cardId);
-  const stored = cache.get(cardId);
-  const cooldown = cooldowns.get(cardId);
+  const language = marketLanguage(lang);
+  const key = marketCardKey(cardId, language);
+  const stored = cache.get(key);
+  const cooldown = cooldowns.get(key);
+  const forCard = value => ({ ...value, cardId });
   if (cooldown && cooldown.until > Date.now()) {
-    if (stored) return previousWithError(stored, cooldown.error, cooldown.attemptedAt);
+    if (stored) return forCard(previousWithError(stored, cooldown.error, cooldown.attemptedAt));
     throw cooldown.error;
   }
-  if (!force && stored && stored.savedAt + CACHE_TTL > Date.now()) return checkedBundle(stored.value, new Date().toISOString());
-  if (pending.has(cardId)) return structuredClone(await pending.get(cardId));
+  if (!force && stored && stored.savedAt + CACHE_TTL > Date.now()) return forCard(checkedBundle(stored.value, new Date().toISOString()));
+  if (pending.has(key)) return forCard(structuredClone(await pending.get(key)));
   const attemptedAt = new Date().toISOString();
   const task = (async () => {
     try {
-      const value = checkedBundle(bundle(await requestJSON(`/api/prices/${encodeURIComponent(cardId)}${force ? '?refresh=1' : ''}`), cardId), attemptedAt);
+      const params = new URLSearchParams();
+      if (language !== 'en') params.set('lang', language);
+      if (force) params.set('refresh', '1');
+      const value = checkedBundle(bundle(await requestJSON(`/api/prices/${encodeURIComponent(cardId)}${params.size ? `?${params}` : ''}`), cardId, language), attemptedAt);
       // A replica returning an older cached bundle must not roll the browser back.
       const previousDate = Date.parse(stored?.value.fetchedAt);
       const nextDate = Date.parse(value.fetchedAt);
@@ -204,29 +218,31 @@ export async function getPrices(cardId, { force = false } = {}) {
         const error = new Error('The price service returned an older snapshot. The newer reference is retained.');
         return previousWithError(stored, error, attemptedAt);
       }
-      cooldowns.delete(cardId);
-      remember(cardId, value);
+      cooldowns.delete(key);
+      remember(key, value);
       return value;
     } catch (error) {
-      cooldowns.set(cardId, { until: error.retryAt || Date.now() + 30_000, error, attemptedAt });
+      cooldowns.set(key, { until: error.retryAt || Date.now() + 30_000, error, attemptedAt });
       while (cooldowns.size > CACHE_LIMIT) cooldowns.delete(cooldowns.keys().next().value);
       if (stored) return previousWithError(stored, error, attemptedAt);
       throw error;
     }
   })();
-  pending.set(cardId, task);
-  try { return structuredClone(await task); }
-  finally { pending.delete(cardId); }
+  pending.set(key, task);
+  try { return forCard(structuredClone(await task)); }
+  finally { pending.delete(key); }
 }
 
 /** Server history contains public observations, not personal portfolio values. */
-export async function getPriceHistory(cardId, variantId = null, days = 90) {
+export async function getPriceHistory(cardId, variantId = null, days = 90, lang = 'en') {
   cardId = id(cardId);
+  const language = marketLanguage(lang);
   const selected = variantId === null ? 'generic' : id(variantId, 'variant');
   if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error('Choose a history period between 1 and 365 days.');
   const params = new URLSearchParams({ variant: selected, days: String(days) });
+  if (language !== 'en') params.set('lang', language);
   const value = await requestJSON(`/api/prices/${encodeURIComponent(cardId)}/history?${params}`);
-  if (!value || value.cardId !== cardId || (value.variantId ?? 'generic') !== selected || !Array.isArray(value.points) || value.points.length > 366) {
+  if (!matchesCard(value, cardId, language) || (value.variantId ?? 'generic') !== selected || !Array.isArray(value.points) || value.points.length > 366) {
     throw new Error('The price service returned mismatched history.');
   }
   const seen = new Set();

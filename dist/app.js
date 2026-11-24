@@ -1,5 +1,6 @@
 import { emptyState, normalizeState, addCard, updateEntry, removeEntry, totals, recordSnapshot, exportCSV, CONDITIONS, SEALED_TYPES, effectivePrice, applyMarketUpdate, applySealedMarketUpdate } from './model.js';
-import { searchCards, getCard, getSet, cardImage } from './catalog.js';
+import { searchCards, getCard, getSet, getSets, cardImage } from './catalog.js';
+import { CATALOGUE_LANGUAGES, catalogueLanguage, languageLabel, marketCardKey, marketLanguage } from './languages.js';
 import { getPrices, getPriceHistory, priceServiceHealth } from './price-client.js';
 import { normalizeQuote, quoteStatus } from './pricing.js';
 import { priceBadge, identityLabel, coveragePanel, marketPanel, variantFields, personalFields, historyPanel } from './price-view.js';
@@ -39,12 +40,11 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 const euro = value => value === null || value === undefined ? 'Unavailable' : new Intl.NumberFormat('en-IE', {style:'currency',currency:'EUR',maximumFractionDigits:2}).format(value);
 const num = value => new Intl.NumberFormat('en-GB').format(value);
 const dateLabel = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'short',year:'numeric'}).format(new Date(value)) : 'Date unavailable';
-// DOM attributes and form values are input, even when the current select only
-// offers these two languages. Keep the search selector's state canonical.
-const catalogueLanguage = value => value === 'it' ? 'it' : 'en';
-// Imported sets can use other valid catalogue languages, independently of the
-// English/Italian search selector. Preserve those codes without trusting markup.
-const catalogueSetLanguage = value => typeof value === 'string' && /^[a-z]{2}(?:-[a-z]{2})?$/.test(value) ? value : 'en';
+// Imported sets may have catalogue languages that are absent from the selector.
+const catalogueSetLanguage = value => {
+  const market = marketLanguage(value);
+  return market !== 'en' ? market : typeof value === 'string' && /^[a-z]{2}(?:-[a-z]{2})?$/.test(value) ? value : 'en';
+};
 // Keep existing storage keys so the new brand retains every saved collection.
 const STORAGE_KEY = 'pocketvault.collection.v1';
 const MIGRATION_BACKUP_KEY = 'pocketvault.before-v2';
@@ -68,7 +68,7 @@ try {
 } catch { storageWarning = 'Browser storage is unavailable. Changes will last for this visit only; export a backup before closing.'; }
 let page = pages[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard';
 let featured = [], query = '', searchPage = 1, searchResults = [], searchError = '', searching = false, searchTicket = 0, setView = null;
-let lastSetRequest = null;
+let lastSetRequest = null, listingSets = false, catalogueSets = [];
 let collectionQuery = '', binderFilter = 'all', kindFilter = 'all', sort = 'recent', view = 'grid', range = '30';
 let sealedQuery = '', sealedType = '', sealedPage = 1, sealedResult = null, sealedError = '', sealedLoading = false, sealedTicket = 0;
 let modalCard = null, modalEntry = null, modalWish = null, modalMode = 'collect', modalTicket = 0;
@@ -91,7 +91,7 @@ function art(card, classes = '', high = false) {
     return src?`<span class="sealed-art product-photo"><img src="${esc(src)}" alt="${esc(card.name)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"><span class="photo-fallback" aria-label="Product image unavailable">${icon('box')}</span></span>`:`<span class="sealed-art" aria-label="Sealed product">${icon('box')}</span>`;
   }
   const src = imageURL(card, high);
-  return src ? `<img class="${classes}" src="${esc(src)}" alt="${esc(card.name)}" loading="lazy" decoding="async">` : icon('cards');
+  return src ? `<img class="${classes}" src="${esc(src)}" alt="${esc(card.name)}" loading="lazy" decoding="async"><span class="card-art-fallback" aria-label="Card image unavailable">${icon('cards')}</span>` : icon('cards');
 }
 function button(label, action, symbol, cls = '') {
   return `<button class="button ${cls}" data-action="${action}">${symbol ? icon(symbol) : ''}${label}</button>`;
@@ -175,7 +175,7 @@ function cardTile(card, type = 'catalog') {
   const isOwned = state.collection.some(c=>c.id===card.id&&c.lang===(card.lang||lang));
   const knownPrice = Object.hasOwn(card,'price');
   const value=type==='collection'?effectivePrice(card):card.price;
-  return `<article class="pokemon-card"><button class="card-open" ${attrs} aria-label="View ${esc(card.name)}"><div class="card-art">${art(card)}${type==='collection'?`<span class="card-badge">${card.quantity} owned</span>`:isOwned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(card.name)}</div><div class="card-set">${esc(card.setName||'Pokémon TCG')} ${card.localId?`· #${esc(card.localId)}`:''}</div></button><div class="card-bottom"><span class="card-price">${knownPrice?(value===null?'Not valued':euro(value)):'View details'}</span><button class="icon-button" ${attrs} aria-label="${type==='collection'?'Edit':'Add'} ${esc(card.name)}">${icon(type==='collection'?'chevron':'plus')}</button></div>${type==='collection'?`<div class="card-quantity">${esc(identityLabel(card))}</div>${priceBadge(card)}`:''}</article>`;
+  return `<article class="pokemon-card"><button class="card-open" ${attrs} aria-label="View ${esc(card.name)}"><div class="card-art">${art(card)}${type==='collection'?`<span class="card-badge">${card.quantity} owned</span>`:isOwned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(card.name)}</div><div class="card-set">${esc(card.setName||'Pokémon TCG')} ${card.localId?`· #${esc(card.localId)}`:''}</div></button><div class="card-bottom"><span class="card-price">${knownPrice?(value==null?'Not valued':type==='catalog'&&marketLanguage(card.lang)!=='en'?'View prices':euro(value)):'View details'}</span><button class="icon-button" ${attrs} aria-label="${type==='collection'?'Edit':'Add'} ${esc(card.name)}">${icon(type==='collection'?'chevron':'plus')}</button></div>${type==='collection'?`<div class="card-quantity">${esc(identityLabel(card))}</div>${priceBadge(card)}`:''}</article>`;
 }
 function sealedTile(product, owned=false) {
   const attrs=owned?`data-entry="${esc(product.uid)}"`:`data-sealed="${esc(product.id)}"`;
@@ -212,22 +212,46 @@ function collectionResults() {
   return `<div class="result-note"><span>${num(rows.length)} collection entries</span><span>EUR · Personal valuations override market references</span></div>${view==='grid'?`<div class="card-grid collection-grid">${rows.map(c=>cardTile(c,'collection')).join('')}</div>`:`<div class="table-scroll"><table class="collection-table"><thead><tr><th>Item</th><th>Type / condition</th><th>Quantity</th><th>Unit cost</th><th>Unit valuation</th><th>Total value</th><th></th></tr></thead><tbody>${rows.map(c=>`<tr><td><div class="table-card">${art(c)}<button data-entry="${esc(c.uid)}">${esc(c.name)}<small>${esc(c.setName)}${c.localId?` · #${esc(c.localId)}`:''} · ${esc(c.lang==='und'?'Language unspecified':c.lang.toUpperCase())}</small></button></div></td><td>${esc(identityLabel(c))}</td><td>${c.quantity}</td><td>${euro(c.cost)}</td><td>${euro(effectivePrice(c))}<br>${priceBadge(c)}</td><td>${effectivePrice(c)===null?'—':euro(effectivePrice(c)*c.quantity)}</td><td><button class="icon-button" data-entry="${esc(c.uid)}" aria-label="Edit ${esc(c.name)}">${icon('chevron')}</button></td></tr>`).join('')}</tbody></table></div>`}`;
 }
 function catalog() {
-  return `${heading(setView?esc(setView.name):'Find your next favorite.',setView?'Explore the set and fill the spaces in your binder.':'From your first partner to the one you’ve been chasing.')}
-  <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" aria-label="Search cards by name" placeholder="Search Pokémon cards, e.g. Pikachu…" value="${esc(query)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group"><select id="catalog-lang" aria-label="Catalogue language"><option value="en" ${lang==='en'?'selected':''}>English cards</option><option value="it" ${lang==='it'?'selected':''}>Italian cards</option></select><button class="button primary" type="submit">${icon('search')}Search</button></div></form><div class="chips">${['Pikachu','Charizard','Eevee','Mew','Gengar','Dragonite'].map(n=>`<button class="chip ${query===n?'active':''}" data-search="${n}">${n}</button>`).join('')}${setView?'<button class="chip active" data-action="clear-search">Clear set</button>':''}</div><div id="catalog-results">${catalogResults()}</div>`;
+  const selected=CATALOGUE_LANGUAGES.find(item=>item.code===lang);
+  const asian=marketLanguage(lang)!=='en';
+  const examples=asian?[selected?.example].filter(Boolean):['Pikachu','Charizard','Eevee','Mew','Gengar','Dragonite'];
+  return `${heading(setView?esc(setView.name):'Discover cards',setView?`${esc(languageLabel(lang))} · ${esc(setView.id)}`:'Search by name or card ID, or browse the sets for a language.')}
+  <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" aria-label="Search cards by name or catalogue ID" placeholder="${esc(selected?.example||'Pikachu')} or a card ID…" value="${esc(query)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group"><select id="catalog-lang" aria-label="Catalogue language">${CATALOGUE_LANGUAGES.map(({code,label})=>`<option value="${code}" ${lang===code?'selected':''}>${label}</option>`).join('')}${!selected?`<option value="${esc(lang)}" selected>${esc(languageLabel(lang))}</option>`:''}</select><button class="button primary" type="submit">${icon('search')}Search</button></div></form>
+  <div class="chips"><button class="chip ${listingSets?'active':''}" data-action="browse-catalogue-sets">Browse sets</button>${examples.map(name=>`<button class="chip ${query===name?'active':''}" data-search="${esc(name)}">${esc(name)}</button>`).join('')}${setView||listingSets?'<button class="chip" data-action="clear-search">Clear</button>':''}</div><div id="catalog-results">${catalogResults()}</div>`;
 }
 function catalogResults() {
   if(searching) return skeletons();
-  if(searchError) return empty('info','The catalogue is taking a break.',esc(searchError),'Try again','retry-search');
-  const usingFeatured=!query&&!setView;
+  if(searchError) return empty('info','Couldn’t load the catalogue',esc(searchError),'Try again','retry-search');
+  if(listingSets){
+    if(!catalogueSets.length)return empty('sets','No sets available','This language has no sets in the source catalogue yet.','','');
+    const display=catalogueSets.slice((searchPage-1)*24,searchPage*24);
+    return `<div class="result-note"><span>${num(catalogueSets.length)} sets · ${esc(languageLabel(lang))}</span></div><div class="set-grid">${display.map(set=>`<button class="set-tile" data-set="${esc(set.id)}" data-lang="${esc(lang)}"><div class="set-tile-top">${icon('sets')}<span class="set-code">${esc(set.id)}</span></div><h3>${esc(set.name)}</h3>${Number.isInteger(set.cardCount?.total)?`<p>${num(set.cardCount.total)} cards in the catalogue</p>`:''}</button>`).join('')}</div>${cataloguePagination(searchPage*24>=catalogueSets.length)}`;
+  }
+  const usingFeatured=!query&&!setView&&marketLanguage(lang)==='en';
+  if(!usingFeatured&&!query&&!setView)return empty('sets',`Browse ${esc(languageLabel(lang))} cards`,'Search for a card by its printed name or open a set to see its cards.','Browse sets','browse-catalogue-sets');
   const rows=usingFeatured?featured:searchResults;
-  if(!rows.length) return empty('search','No cards found.','Try another Pokémon name, switch languages, or return to the first page.','Browse favorites','clear-search');
+  if(!rows.length) return empty('search','No cards found','Try the name printed on the card, its catalogue ID or the set it belongs to.','Browse sets','browse-catalogue-sets')+(searchPage>1?cataloguePagination(true):'');
   const display=usingFeatured?rows:setView?rows.slice((searchPage-1)*24,searchPage*24):rows;
-  return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(setView.name)}`:`Results for “${esc(query)}” · ${esc(lang.toUpperCase())}`}</span><span>${usingFeatured?'Saved reference snapshots':'Open a card for details and pricing'}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${!usingFeatured?`<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${setView?searchPage*24>=rows.length?'disabled':'':rows.length<24?'disabled':''}>Next</button></div>`:'<p class="card-footer-note">Search the catalogue to explore more cards. Featured snapshot dates are shown in card details.</p>'}`;
+  return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(setView.name)}`:`Results for “${esc(query)}” · ${esc(lang.toUpperCase())}`}</span><span>${usingFeatured?'Saved reference snapshots':'Open a card for details and pricing'}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${!usingFeatured?cataloguePagination(setView?searchPage*24>=rows.length:rows.length<24):'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>'}`;
 }
+function cataloguePagination(lastPage) {
+  return `<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${lastPage?'disabled':''}>Next</button></div>`;
+}
+async function browseCatalogueSets() {
+  const ticket=++searchTicket;
+  listingSets=true;setView=null;lastSetRequest=null;query='';searchPage=1;searching=true;searchError='';
+  if(page==='catalog')render();
+  try {
+    const sets=await getSets(lang);
+    if(ticket===searchTicket)catalogueSets=sets.filter(set=>typeof set?.id==='string'&&typeof set.name==='string').reverse();
+  }catch(error){if(ticket===searchTicket)searchError=error.message;}
+  finally{if(ticket===searchTicket){searching=false;updateCatalog();}}
+}
+
 async function runSearch() {
   const ticket=++searchTicket;
-  const leavingSet=Boolean(setView||lastSetRequest);
-  setView=null; lastSetRequest=null; searchError='';
+  const leavingSet=Boolean(setView||lastSetRequest||listingSets);
+  setView=null; lastSetRequest=null; listingSets=false; searchError='';
   if(leavingSet&&page==='catalog')render();
   if(!query.trim()) {searching=false;searchResults=[];updateCatalog();return;}
   searching=true;updateCatalog();
@@ -237,7 +261,7 @@ async function runSearch() {
 }
 function updateCatalog() {const container=document.querySelector('#catalog-results');if(container)container.innerHTML=catalogResults();}
 async function browseSet(id,language) {
-  ++searchTicket;lang=catalogueSetLanguage(language||lang);lastSetRequest={id,lang};query='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
+  ++searchTicket;listingSets=false;lang=catalogueSetLanguage(language||lang);lastSetRequest={id,lang};query='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
   const ticket=searchTicket;
   try {const data=await getSet(id,lang);if(ticket!==searchTicket)return;setView=data;searchResults=data.cards.map(c=>({...c,lang,setName:data.name}));}
   catch(error){if(ticket!==searchTicket)return;searchError=error.message;}
@@ -282,7 +306,7 @@ async function openCard(id,language=lang,entry=null,wish=null) {
   const ticket=++modalTicket;++modalHistoryTicket;
   modalCard=null;modalBundle=null;modalWarning='';modalDraft=null;modalEntry=entry;modalWish=wish;modalMode=wish?'wish':'collect';
   modalShell('Card details','<div class="loading"><span class="spinner"></span>Loading card and price references…</div>');
-  const [details,prices]=await Promise.allSettled([entry||wish?Promise.resolve(structuredClone(entry||wish)):getCard(id,language),getPrices(id)]);
+  const [details,prices]=await Promise.allSettled([entry||wish?Promise.resolve(structuredClone(entry||wish)):getCard(id,language),getPrices(id,{lang:language})]);
   if(ticket!==modalTicket||!modal.open)return;
   if(details.status==='fulfilled')modalCard=ensureMarket(details.value);
   else {
@@ -389,7 +413,7 @@ function captureCardDraft() {
 function renderCardModal() {
   const c=modalCard;if(!c)return;
   const e=modalEntry,w=modalWish,d=modalDraft||{},wishMode=modalMode==='wish';
-  modalShell(c.name,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(c.name)}"></a>`:icon('cards')}<p class="modal-card-meta">${esc(c.setName)}<br>#${esc(c.localId)} · ${esc(c.lang.toUpperCase())}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${marketPanel(c,modalBundle)}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">Targets use current market references. Personal valuations never trigger a target.</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
+  modalShell(c.name,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(c.name)}"></a>`:icon('cards')}<p class="modal-card-meta">${esc(c.setName)}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${marketPanel(c,modalBundle)}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
   const form=document.querySelector('#card-form');
   for(const name of ['gradingCompany','gradingGrade','manualAmount','manualNote','manualUrl'])if(Object.hasOwn(d,name)&&form.elements[name])form.elements[name].value=d[name];
   if(d.manualAmount)form.querySelector('.personal-fields')?.setAttribute('open','');
@@ -433,15 +457,15 @@ async function refreshCardPrice() {
   if(!modalCard)return;
   captureCardDraft();const ticket=modalTicket,variant=modalCard.variantId;
   const trigger=document.querySelector('[data-action="refresh-card-price"]');if(trigger){trigger.disabled=true;trigger.textContent='Checking…';}
-  try {const bundle=await getPrices(modalCard.id,{force:true});if(ticket!==modalTicket||!modal.open)return;modalBundle=bundle;modalCard=applyMarketUpdate(modalCard,bundle);modalWarning='';}
+  try {const bundle=await getPrices(modalCard.id,{force:true,lang:modalCard.lang});if(ticket!==modalTicket||!modal.open)return;modalBundle=bundle;modalCard=applyMarketUpdate(modalCard,bundle);modalWarning='';}
   catch(error){if(ticket!==modalTicket||!modal.open)return;modalCard=priceFailure(modalCard,error.message);modalWarning=error.message;}
   if(ticket===modalTicket&&modal.open){captureCardDraft();renderCardModal();if(variant!==modalCard.variantId)++modalHistoryTicket;}
 }
-async function showPriceHistory() {
-  if(!modalCard)return;
+async function showPriceHistory(days=90) {
+  if(!modalCard||![30,90,365].includes(days))return;
   const ticket=++modalHistoryTicket,cardTicket=modalTicket,card=modalCard;
   const target=document.querySelector('#card-price-history');target.innerHTML='<p class="form-hint">Loading recorded prices…</p>';
-  try{const history=await getPriceHistory(card.id,card.variantId,90);if(ticket!==modalHistoryTicket||cardTicket!==modalTicket||!modal.open||card.variantId!==modalCard?.variantId)return;target.innerHTML=historyPanel(history);}
+  try{const history=await getPriceHistory(card.id,card.variantId,days,card.lang);if(ticket!==modalHistoryTicket||cardTicket!==modalTicket||!modal.open||card.variantId!==modalCard?.variantId)return;target.innerHTML=historyPanel(history,days);}
   catch(error){if(ticket===modalHistoryTicket&&cardTicket===modalTicket&&modal.open)target.innerHTML=`<p class="notice warning">${esc(error.message)}</p>`;}
 }
 
@@ -497,8 +521,8 @@ async function refreshPrices({automatic=false}={}) {
   if(refreshing)return;
   if(recoveredRaw||migrationPending){if(!automatic)toast('Back up and resolve the saved-data warning before refreshing.');return;}
   const eligible=[...state.collection,...state.wishlist].filter(c=>c.kind!=='sealed'||/^sealed-tcgp-[1-9]\d*-eu$/.test(c.id));
-  const keyFor=c=>`${c.kind||'card'}:${c.id}`;
-  const identities=new Map(eligible.map(c=>[keyFor(c),{id:c.id,kind:c.kind||'card'}]));
+  const keyFor=c=>c.kind==='sealed'?`sealed:${c.id}`:`card:${marketCardKey(c.id,marketLanguage(c.lang))}`;
+  const identities=new Map(eligible.map(c=>[keyFor(c),{id:c.id,kind:c.kind||'card',lang:c.lang}]));
   const all=[...identities.keys()];
   if(!all.length){if(!automatic)toast('No linked market references to refresh. Open a custom sealed product to record a new valuation.');return;}
   const cards=all.slice(refreshCursor,refreshCursor+100);
@@ -506,10 +530,10 @@ async function refreshPrices({automatic=false}={}) {
   refreshing=true;lastAutoRefresh=Date.now();
   if(!automatic)toast('Checking shared price references…');
   const updates=new Map(),errors=new Map();let index=0;
-  async function worker(){while(index<cards.length){const key=cards[index++],{id,kind}=identities.get(key);try{updates.set(key,await (kind==='sealed'?getSealedProduct(id,{force:!automatic}):getPrices(id,{force:!automatic})));}catch(error){errors.set(key,error.message);}}}
+  async function worker(){while(index<cards.length){const key=cards[index++],{id,kind,lang}=identities.get(key);try{updates.set(key,await (kind==='sealed'?getSealedProduct(id,{force:!automatic}):getPrices(id,{force:!automatic,lang})));}catch(error){errors.set(key,error.message);}}}
   await Promise.all(Array.from({length:Math.min(3,cards.length)},worker));
   try{
-    const merge=c=>updates.has(keyFor(c))?(c.kind==='sealed'?applySealedMarketUpdate(c,updates.get(keyFor(c))):applyMarketUpdate(c,updates.get(keyFor(c)))):errors.has(keyFor(c))?priceFailure(c,errors.get(keyFor(c))):c;
+    const merge=c=>updates.has(keyFor(c))?(c.kind==='sealed'?applySealedMarketUpdate(c,updates.get(keyFor(c))):applyMarketUpdate(c,{...updates.get(keyFor(c)),cardId:c.id})):errors.has(keyFor(c))?priceFailure(c,errors.get(keyFor(c))):c;
     commit({...state,collection:state.collection.map(merge),wishlist:state.wishlist.map(merge)},state.collection.length>0,'prices');
     const failed=errors.size+[...updates.values()].filter(b=>b.lastError).length;
     if(!automatic)toast(`${updates.size} item references checked.${failed?` ${failed} could not update; previous observations retained.`:''}${all.length>100?' Up to 100 items per check; check again to continue.':''}`);
@@ -533,6 +557,7 @@ document.addEventListener('click',async event=>{
     if(el.dataset.binder){binderFilter=el.dataset.binder;collectionQuery='';navigate('collection');return;}
     if(el.dataset.view){view=el.dataset.view;render();return;}
     if(el.dataset.range){range=el.dataset.range;render();return;}
+    if(el.dataset.historyDays){await showPriceHistory(Number(el.dataset.historyDays));return;}
     if(el.dataset.search){query=el.dataset.search;searchPage=1;setView=null;render();await runSearch();return;}
     switch(el.dataset.action){
       case 'discover':navigate('catalog');break;
@@ -552,10 +577,11 @@ document.addEventListener('click',async event=>{
       case 'toggle-modal-mode':captureCardDraft();modalMode=modalMode==='wish'?'collect':'wish';renderCardModal();break;
       case 'remove-card':removeCard();break;
       case 'clear-filters':binderFilter='all';kindFilter='all';collectionQuery='';render();break;
-      case 'clear-search':++searchTicket;query='';setView=null;lastSetRequest=null;searchPage=1;searching=false;searchError='';render();break;
-      case 'retry-search':if(lastSetRequest)await browseSet(lastSetRequest.id,lastSetRequest.lang);else if(query)await runSearch();else{searchError='';render();}break;
-      case 'previous-page':if(searchPage>1){searchPage--;if(setView)updateCatalog();else await runSearch();}break;
-      case 'next-page':searchPage++;if(setView)updateCatalog();else await runSearch();break;
+      case 'browse-catalogue-sets':await browseCatalogueSets();break;
+      case 'clear-search':++searchTicket;query='';listingSets=false;setView=null;lastSetRequest=null;searchPage=1;searching=false;searchError='';render();break;
+      case 'retry-search':if(listingSets)await browseCatalogueSets();else if(lastSetRequest)await browseSet(lastSetRequest.id,lastSetRequest.lang);else if(query)await runSearch();else{searchError='';render();}break;
+      case 'previous-page':if(searchPage>1){searchPage--;if(setView||listingSets)updateCatalog();else await runSearch();}break;
+      case 'next-page':searchPage++;if(setView||listingSets)updateCatalog();else await runSearch();break;
       case 'refresh':await refreshPrices();break;
       case 'refresh-card-price':await refreshCardPrice();break;
       case 'price-history':await showPriceHistory();break;
@@ -599,7 +625,14 @@ document.addEventListener('change',event=>{
   if(event.target.id==='binder-filter'){binderFilter=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
   if(event.target.id==='kind-filter'){kindFilter=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
   if(event.target.id==='sort'){sort=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
-  if(event.target.id==='catalog-lang'){lang=catalogueLanguage(event.target.value);event.target.value=lang;query=document.querySelector('#catalog-query').value.trim();try{localStorage.setItem('pocketvault.lang',lang);}catch{}searchPage=1;runSearch();}
+  if(event.target.id==='catalog-lang'){
+    lang=catalogueLanguage(event.target.value);event.target.value=lang;
+    query=document.querySelector('#catalog-query').value.trim();
+    try{localStorage.setItem('pocketvault.lang',lang);}catch{}
+    searchPage=1;
+    if(!query&&(listingSets||marketLanguage(lang)!=='en'))void browseCatalogueSets();
+    else {render();void runSearch();}
+  }
   if(event.target.id==='import-file'){readImport(event.target.files[0]);event.target.value='';}
 });
 document.addEventListener('keydown',event=>{
