@@ -1,5 +1,6 @@
 import { normalizePricing, normalizeQuote } from '../dist/pricing.js';
 import { handleSealedRequest, refreshSealedScheduled } from './sealed.js';
+import { checkRateLimit, deployCommit, operationalEvent, rateLimitsReady } from './security.js';
 
 const DAY = 86_400_000;
 const TTL = DAY;
@@ -9,6 +10,7 @@ const UPSTREAM_TIMEOUT = 12_000;
 const MAX_BODY_BYTES = 512 * 1024;
 const ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,79}$/;
 const VARIANT_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
+const MAX_PROVISIONAL_CARDS = 256;
 const inFlight = new Map();
 
 const iso = value => new Date(value).toISOString();
@@ -17,6 +19,7 @@ const config = env => ({
   tracked: cap(env.MAX_TRACKED_CARDS, 500, 2000),
   daily: cap(env.MAX_UPSTREAM_REQUESTS_PER_DAY, 1000, 5000),
   batch: cap(env.REFRESH_BATCH_SIZE, 3, 3),
+  admissions: cap(env.MAX_NEW_CARD_REQUESTS_PER_DAY, Math.max(1, Math.floor(cap(env.MAX_UPSTREAM_REQUESTS_PER_DAY, 1000, 5000) / 4)), cap(env.MAX_UPSTREAM_REQUESTS_PER_DAY, 1000, 5000)),
 });
 
 class PublicError extends Error {
@@ -41,24 +44,34 @@ function servedBundle(row) {
   };
 }
 
-async function admitCard(db, id, now, limit) {
+async function admitCard(db, id, now, limit, admit) {
   const activeCutoff = iso(Date.parse(now) - 30 * DAY);
   const capacityError = () => new PublicError('The active shared price catalogue has reached its configured capacity. Saved collections and archived price history are unaffected.', 503, 3600);
   let row = await db.prepare('SELECT * FROM price_cards WHERE card_id = ?1').bind(id).first();
+  if (!row || (!row.payload && row.next_refresh_at <= now)) await admit?.();
   if (!row) {
     // A catalogue slot expires after 30 days without a request. Archived rows remain
     // available for history until retention cleanup, without reserving active slots.
-    await db.prepare(`INSERT INTO price_cards (card_id, created_at, last_requested_at, next_refresh_at)
+    await db.batch([
+      // At capacity, replace at most one completed negative entry. Active leases
+      // cannot be evicted; failures never take a confirmed catalogue slot.
+      db.prepare(`DELETE FROM price_cards WHERE card_id IN (
+        SELECT card_id FROM price_cards WHERE payload IS NULL AND lease_until <= ?1
+        AND (SELECT COUNT(*) FROM price_cards WHERE payload IS NULL) >= ?2
+        ORDER BY created_at LIMIT 1)`).bind(now, MAX_PROVISIONAL_CARDS),
+      db.prepare(`INSERT INTO price_cards (card_id, created_at, last_requested_at, next_refresh_at)
       SELECT ?1, ?2, ?2, ?2
-      WHERE (SELECT COUNT(*) FROM price_cards WHERE last_requested_at >= ?4) < ?3
-      ON CONFLICT(card_id) DO NOTHING`).bind(id, now, limit, activeCutoff).run();
+      WHERE (SELECT COUNT(*) FROM price_cards WHERE payload IS NOT NULL AND last_requested_at >= ?4) < ?3
+        AND (SELECT COUNT(*) FROM price_cards WHERE payload IS NULL) < ?5
+      ON CONFLICT(card_id) DO NOTHING`).bind(id, now, limit, activeCutoff, MAX_PROVISIONAL_CARDS),
+    ]);
     row = await db.prepare('SELECT * FROM price_cards WHERE card_id = ?1').bind(id).first();
     if (!row) throw capacityError();
   }
-  if (row.last_requested_at < activeCutoff) {
+  if (row.payload && row.last_requested_at < activeCutoff) {
     const reactivated = await db.prepare(`UPDATE price_cards SET last_requested_at = ?2
       WHERE card_id = ?1 AND (last_requested_at >= ?3 OR
-        (SELECT COUNT(*) FROM price_cards WHERE last_requested_at >= ?3) < ?4)
+        (SELECT COUNT(*) FROM price_cards WHERE payload IS NOT NULL AND last_requested_at >= ?3) < ?4)
       RETURNING *`).bind(id, now, activeCutoff, limit).first();
     if (!reactivated) throw capacityError();
     row = reactivated;
@@ -93,7 +106,7 @@ async function providerCard(id, now, fetchImpl) {
       await response.body?.cancel();
       throw error;
     }
-    if (Number(response.headers.get('Content-Length')) > MAX_BODY_BYTES) throw new PublicError('The provider response exceeded the supported size.');
+    if (Number(response.headers.get('Content-Length')) > MAX_BODY_BYTES) { await response.body?.cancel(); throw new PublicError('The provider response exceeded the supported size.'); }
     const reader = response.body?.getReader();
     if (!reader) throw new PublicError('The provider returned an empty response.');
     const chunks = [];
@@ -139,8 +152,9 @@ function observationStatements(db, bundle, now) {
   });
 }
 
-async function acquireBudget(db, now, maximum) {
-  return db.prepare(`INSERT INTO upstream_budget (day, calls) VALUES (?1, 1)
+async function acquireBudget(db, now, maximum, admission = false) {
+  const table = admission ? 'price_admission_budget' : 'upstream_budget';
+  return db.prepare(`INSERT INTO ${table} (day, calls) VALUES (?1, 1)
     ON CONFLICT(day) DO UPDATE SET calls = calls + 1 WHERE calls < ?2 RETURNING calls`)
     .bind(iso(now).slice(0, 10), maximum).first();
 }
@@ -152,11 +166,13 @@ async function refreshCard(db, id, env, fetchImpl, now) {
     WHERE card_id = ?1 AND lease_until <= ?3 AND next_refresh_at <= ?3 RETURNING *`)
     .bind(id, lease, start).first();
   if (!claimed) return null;
-  if (!await acquireBudget(db, now, config(env).daily)) {
+  const limits = config(env);
+  const admissionExhausted = !claimed.payload && !await acquireBudget(db, now, limits.admissions, true);
+  if (admissionExhausted || !await acquireBudget(db, now, limits.daily)) {
     const nextDay = iso(Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate() + 1));
     await db.prepare('UPDATE price_cards SET lease_until = ?, next_refresh_at = ? WHERE card_id = ? AND lease_until = ?')
       .bind('', nextDay, id, lease).run();
-    throw new PublicError('The daily shared price refresh budget is exhausted. Saved prices remain available.', 429, Math.max(1, Math.ceil((Date.parse(nextDay) - now) / 1000)));
+    throw new PublicError(admissionExhausted ? 'The daily new-card lookup allowance is exhausted. Saved prices can still refresh.' : 'The daily shared price refresh budget is exhausted. Saved prices remain available.', 429, Math.max(1, Math.ceil((Date.parse(nextDay) - now) / 1000)));
   }
   try {
     const bundle = await providerCard(id, now, fetchImpl);
@@ -178,11 +194,21 @@ async function refreshCard(db, id, env, fetchImpl, now) {
     }
     const store = db.prepare(`UPDATE price_cards SET payload = ?2, next_refresh_at = ?3,
       failure_count = 0, lease_until = '', last_attempt_at = ?4, last_error = NULL
-      WHERE card_id = ?1 AND lease_until = ?5`).bind(id, JSON.stringify(bundle), iso(now + TTL), start, lease);
+      WHERE card_id = ?1 AND lease_until = ?5 AND (payload IS NOT NULL OR
+        (SELECT COUNT(*) FROM price_cards WHERE payload IS NOT NULL AND last_requested_at >= ?6) < ?7)`)
+      .bind(id, JSON.stringify(bundle), iso(now + TTL), start, lease, iso(now - 30 * DAY), limits.tracked);
     // The lease remains valid for 60s; provider requests abort after 12s. A single batch commits latest + history atomically.
-    await db.batch([store, ...observationStatements(db, bundle, now)]);
+    const result = await db.batch([store, ...observationStatements(db, bundle, now)]);
+    if (!result[0]?.meta?.changes) {
+      const latest = await db.prepare('SELECT lease_until FROM price_cards WHERE card_id = ?').bind(id).first();
+      if (latest?.lease_until !== lease) return null;
+      throw new PublicError('The catalogue is busy. Please try this card again later.', 503, 60);
+    }
     return bundle;
-  } catch (error) {
+  } catch (failure) {
+    const error = failure instanceof PublicError ? failure : new PublicError('The shared price store is temporarily unavailable.');
+    if (!(failure instanceof PublicError)) operationalEvent('cards', 'store_failure', { status: 503 });
+    else if (error.providerStatus && error.providerStatus !== 404) operationalEvent('cards', 'provider_failure', { providerStatus: error.providerStatus });
     const failures = Math.min(claimed.failure_count + 1, 32);
     const backoff = error.providerStatus === 404 ? DAY : Math.min(DAY, 900_000 * 2 ** Math.min(failures - 1, 7));
     const wait = Math.max(backoff, (error.retryAfter || 0) * 1000);
@@ -194,8 +220,8 @@ async function refreshCard(db, id, env, fetchImpl, now) {
   }
 }
 
-async function currentPrice(db, id, env, fetchImpl, now) {
-  const row = await admitCard(db, id, iso(now), config(env).tracked);
+async function currentPrice(db, id, env, fetchImpl, now, admit) {
+  const row = await admitCard(db, id, iso(now), config(env).tracked, admit);
   if (row.next_refresh_at <= iso(now)) {
     const key = `${id}:${row.created_at}`;
     let refresh = inFlight.get(key);
@@ -219,19 +245,22 @@ export async function handleRequest(request, env, context = {}, dependencies = {
   const url = new URL(request.url);
   if (!url.pathname.startsWith('/api/')) return env.ASSETS ? env.ASSETS.fetch(request) : new Response('Not found', { status: 404 });
   if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Only public read requests are supported.' }, 405, { Allow: 'GET, HEAD' });
+  const limited = await checkRateLimit(request, env);
+  if (limited) return limited;
   if (url.pathname === '/api/sealed' || url.pathname.startsWith('/api/sealed/')) return handleSealedRequest(request, env, dependencies);
   if (url.pathname === '/api/health') {
-    const info = { configured: false, service: 'public-prices', retentionDays: RETENTION_DAYS, scope: 'public quotes only' };
-    if (!env.PRICES_DB) return json(info, 503);
+    const info = { configured: false, service: 'public-prices', retentionDays: RETENTION_DAYS, scope: 'public quotes only', deployCommit: deployCommit(env) };
+    if (!env.PRICES_DB || !rateLimitsReady(env)) return json(info, 503);
     try {
       // Validate schema readiness with at most one row read from each required table.
       await env.PRICES_DB.prepare(`SELECT
         (SELECT card_id FROM price_cards LIMIT 1) AS cards_ready,
         (SELECT card_id FROM price_history LIMIT 1) AS history_ready,
-        (SELECT day FROM upstream_budget LIMIT 1) AS budget_ready`).first();
+        (SELECT day FROM upstream_budget LIMIT 1) AS budget_ready,
+        (SELECT day FROM price_admission_budget LIMIT 1) AS admission_ready`).first();
       let sealedConfigured = false;
       try {
-        await env.PRICES_DB.prepare(`SELECT (SELECT id FROM sealed_feed LIMIT 1), (SELECT product_id FROM sealed_products LIMIT 1), (SELECT product_id FROM sealed_history LIMIT 1)`).first();
+        await env.PRICES_DB.prepare(`SELECT (SELECT id FROM sealed_feed LIMIT 1), (SELECT product_id FROM sealed_products LIMIT 1), (SELECT product_id FROM sealed_history LIMIT 1), (SELECT id FROM sealed_catalogue LIMIT 1)`).first();
         sealedConfigured = true;
       } catch {}
       return json({ ...info, configured: true, sealedConfigured });
@@ -260,10 +289,28 @@ export async function handleRequest(request, env, context = {}, dependencies = {
       return json({ cardId: id, variantId, points: result.results || [], retentionDays: RETENTION_DAYS, dateBasis: 'provider', currency: 'EUR' }, 200, { 'Cache-Control': 'public, max-age=300' });
     }
     if ([...url.searchParams.keys()].some(key => key !== 'refresh') || (url.searchParams.has('refresh') && url.searchParams.get('refresh') !== '1')) throw new PublicError('Unsupported price parameter.', 400, null);
-    const bundle = await currentPrice(db, id, env, dependencies.fetch || fetch, now);
+    const bundle = await currentPrice(db, id, env, dependencies.fetch || fetch, now, async () => {
+      const limited = await checkRateLimit(request, env, 'PRICE_ADMISSION_RATE_LIMITER');
+      if (limited) throw new PublicError((await limited.json()).error, limited.status, 60);
+      // A read-only preflight prevents fresh IDs from churning provisional rows
+      // after either daily allowance is gone. refreshCard still atomically
+      // acquires both budgets, so concurrent admissions cannot bypass the caps.
+      const budget = await db.prepare(`SELECT
+        (SELECT calls FROM price_admission_budget WHERE day=?1) AS admissions,
+        (SELECT calls FROM upstream_budget WHERE day=?1) AS total`).bind(iso(now).slice(0,10)).first();
+      const limits = config(env);
+      if ((budget?.admissions || 0) >= limits.admissions || (budget?.total || 0) >= limits.daily) {
+        const tomorrow = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate()+1);
+        const message = (budget?.total || 0) >= limits.daily
+          ? 'The daily shared price refresh budget is exhausted. Saved prices remain available.'
+          : 'The daily new-card lookup allowance is exhausted. Saved prices can still refresh.';
+        throw new PublicError(message,429,Math.max(1,Math.ceil((tomorrow-now)/1000)));
+      }
+    });
     return json(bundle, 200, { 'Cache-Control': bundle.lastError ? 'no-store' : 'public, max-age=300' });
   } catch (error) {
     if (error instanceof PublicError) return json({ error: error.message }, error.status, error.retryAfter ? { 'Retry-After': String(error.retryAfter) } : {});
+    operationalEvent('cards', 'request_failure', { status: 503 });
     return json({ error: 'The shared price store is temporarily unavailable. Your collection remains on this device.' }, 503);
   }
 }
@@ -276,11 +323,12 @@ export async function refreshScheduled(env, dependencies = {}) {
   await db.batch([
     db.prepare('DELETE FROM price_history WHERE rowid IN (SELECT rowid FROM price_history WHERE date < ? ORDER BY date LIMIT 100)').bind(iso(now - RETENTION_DAYS * DAY).slice(0, 10)),
     db.prepare('DELETE FROM upstream_budget WHERE day < ?').bind(iso(now - 2 * DAY).slice(0, 10)),
+    db.prepare('DELETE FROM price_admission_budget WHERE day < ?').bind(iso(now - 2 * DAY).slice(0, 10)),
     db.prepare('DELETE FROM price_cards WHERE card_id IN (SELECT card_id FROM price_cards WHERE last_requested_at < ? AND lease_until <= ? AND NOT EXISTS (SELECT 1 FROM price_history WHERE price_history.card_id = price_cards.card_id) ORDER BY last_requested_at LIMIT 10)').bind(iso(now - RETENTION_DAYS * DAY), iso(now)),
     db.prepare('DELETE FROM price_cards WHERE card_id IN (SELECT card_id FROM price_cards WHERE payload IS NULL AND created_at < ? AND lease_until <= ? LIMIT 10)').bind(iso(now - DAY), iso(now)),
   ]);
   const result = await db.prepare(`SELECT card_id FROM price_cards WHERE next_refresh_at <= ?1
-    AND lease_until <= ?1 AND last_requested_at >= ?2 ORDER BY next_refresh_at LIMIT ?3`)
+    AND payload IS NOT NULL AND lease_until <= ?1 AND last_requested_at >= ?2 ORDER BY next_refresh_at LIMIT ?3`)
     .bind(iso(now), iso(now - 30 * DAY), config(env).batch).all();
   let refreshed = 0, failed = 0;
   for (const row of result.results || []) {

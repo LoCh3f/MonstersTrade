@@ -1,3 +1,5 @@
+import { operationalEvent } from './security.js';
+
 // TCGPrices' public CC BY 4.0 export. Retail asking prices, not resale values.
 const FEED_URL = 'https://tcgprices.app/data/sealed-prices.csv';
 const ATTRIBUTION_URL = 'https://tcgprices.app/data';
@@ -12,6 +14,9 @@ const TYPES = new Set(['booster-pack','booster-box','elite-trainer-box','collect
 const TYPE_MAP = { 'Booster Pack':'booster-pack', 'Booster Box':'booster-box', BoosterBox:'booster-box', 'Elite Trainer Box':'elite-trainer-box', ETB:'elite-trainer-box', Collection:'collection-box', Tin:'tin', 'Blister Pack':'blister', Blister:'blister', Bundle:'bundle' };
 const HEADERS = ['tcgplayer_product_id','game','set','product','product_type','market','currency','cheapest_store_price','stores_in_stock','url','date'];
 const flights = new WeakMap();
+// Cache plain, public data only. Each generation is validated against D1 feed
+// metadata; no request-owned stream, promise or client information is retained.
+const catalogueIndexes = new WeakMap();
 const iso = value => new Date(value).toISOString();
 
 class FeedError extends Error {
@@ -149,11 +154,17 @@ async function synchronize(db, dependencies, now) {
         FROM sealed_products WHERE seen_at = ?1 AND provider_date >= ?2 AND provider_date <= ?3 AND json_extract(payload,'$.market.amount') > 0
           AND EXISTS (SELECT 1 FROM sealed_feed WHERE id = 1 AND lease_until = ?4)
         ON CONFLICT(product_id,date) DO NOTHING`).bind(start,iso(now - 364*DAY).slice(0,10),start.slice(0,10),lease),
+      db.prepare(`UPDATE sealed_catalogue SET fetched_at=?1,lease_until='',payload=(
+        SELECT json_group_array(json_array(product_id,search_text,product_type)) FROM (
+          SELECT product_id,name,search_text,product_type FROM sealed_products WHERE seen_at=?1 ORDER BY name,product_id LIMIT 2000))
+        WHERE id=1 AND EXISTS (SELECT 1 FROM sealed_feed WHERE id=1 AND lease_until=?2)`).bind(start,lease),
       db.prepare(`UPDATE sealed_feed SET fetched_at=?1,next_refresh_at=?2,lease_until='',last_attempt_at=?1,last_error=NULL,failure_count=0 WHERE id=1 AND lease_until=?3`).bind(start,iso(now+DAY),lease),
     ]);
     const latest = await db.prepare('SELECT fetched_at, lease_until FROM sealed_feed WHERE id=1').first();
     return latest?.fetched_at === start && latest.lease_until === '';
-  } catch (error) {
+  } catch (failure) {
+    const error = failure instanceof FeedError ? failure : new FeedError('The sealed price store is temporarily unavailable.');
+    operationalEvent('sealed', failure instanceof FeedError ? 'provider_failure' : 'store_failure', {status:503});
     const failures = Math.min(row.failure_count+1,32);
     const delay = Math.max(Math.min(DAY,900000*2**Math.min(failures-1,7)),(error.retryAfter||0)*1000);
     await db.prepare(`UPDATE sealed_feed SET lease_until='',next_refresh_at=?1,last_attempt_at=?2,last_error=?3,failure_count=?4 WHERE id=1 AND lease_until=?5`)
@@ -184,6 +195,66 @@ function serveProduct(row, feed) {
   const error = feed.last_error || (older ? 'The provider returned an older observation; the previous reference was kept.' : null);
   const market = { ...product.market, amount:absent?null:product.market.amount, lastAttemptAt:feed.last_attempt_at, lastError:error };
   return { ...product, market, price:market.amount, storesInStock:absent?0:product.storesInStock, lastAttemptAt:feed.last_attempt_at, lastError:feed.last_error, nextRefreshAt:feed.next_refresh_at, unavailable:absent };
+}
+
+async function searchCatalogue(db, dependencies, now, feed, term, type, page) {
+  // A refresh can commit between reads. Retry once against its new generation
+  // rather than publishing an empty/partial page from mixed feed generations.
+  for (let attempt=0; attempt<2; attempt++) {
+    let cached=catalogueIndexes.get(db);
+    if (!cached || cached.fetchedAt!==feed.fetched_at) {
+      const snapshot=await db.prepare('SELECT fetched_at,payload FROM sealed_catalogue WHERE id=1').first();
+      if (!snapshot || snapshot.fetched_at!==feed.fetched_at) {
+        await repairCatalogue(db,feed,now);
+        feed=await ensureFeed(db,dependencies,now);
+        continue;
+      }
+      if (typeof snapshot.payload!=='string' || new TextEncoder().encode(snapshot.payload).byteLength>1800000) throw new FeedError('The sealed catalogue snapshot is unavailable.');
+      const index=JSON.parse(snapshot.payload);
+      if (!Array.isArray(index) || index.length>MAX_PRODUCTS || index.some(item=>!Array.isArray(item) || item.length!==3 || item.some(value=>typeof value!=='string'))) throw new FeedError('The sealed catalogue snapshot is unavailable.');
+      cached={fetchedAt:feed.fetched_at,index};
+      catalogueIndexes.set(db,cached);
+    }
+    const matches=cached.index.filter(item=>(!term || item[1].includes(term)) && (!type || item[2]===type));
+    const selected=matches.slice((page-1)*PAGE_SIZE,page*PAGE_SIZE).map(item=>item[0]);
+    if (!selected.length) return {feed,items:[],total:matches.length};
+    // CROSS JOIN keeps the <=24 supplied IDs as the outer loop. Each product
+    // lookup uses its primary key, independent of catalogue size/search text.
+    const result=await db.prepare(`SELECT product.* FROM json_each(?1) AS selected
+      CROSS JOIN sealed_products AS product ON product.product_id=selected.value WHERE product.seen_at=?2`)
+      .bind(JSON.stringify(selected),feed.fetched_at).all();
+    if (result.results?.length===selected.length) {
+      const byId=new Map(result.results.map(row=>[row.product_id,row]));
+      return {feed,items:selected.map(id=>serveProduct(byId.get(id),feed)),total:matches.length};
+    }
+    feed=await ensureFeed(db,dependencies,now);
+  }
+  throw new FeedError('The sealed catalogue is being updated. Please try again shortly.',503,2);
+}
+
+async function repairCatalogue(db, feed, now) {
+  // During a rolling deployment an older Worker can publish a feed after the
+  // migration backfill. Only one request may rebuild that missing generation;
+  // other readers retry cheaply, without fetching a provider or scanning rows.
+  const start=iso(now),lease=iso(now+60000);
+  const claimed=await db.prepare(`UPDATE sealed_catalogue SET lease_until=?1
+    WHERE id=1 AND fetched_at IS NOT ?2 AND lease_until<=?3
+      AND EXISTS (SELECT 1 FROM sealed_feed WHERE id=1 AND fetched_at=?2) RETURNING id`)
+    .bind(lease,feed.fetched_at,start).first();
+  if (!claimed) return false;
+  try {
+    await db.prepare(`UPDATE sealed_catalogue SET fetched_at=?1,lease_until='',payload=(
+      SELECT json_group_array(json_array(product_id,search_text,product_type)) FROM (
+        SELECT product_id,name,search_text,product_type FROM sealed_products WHERE seen_at=?1 ORDER BY name,product_id LIMIT 2000))
+      WHERE id=1 AND lease_until=?2 AND EXISTS (SELECT 1 FROM sealed_feed WHERE id=1 AND fetched_at=?1)`)
+      .bind(feed.fetched_at,lease).run();
+    return true;
+  } catch {
+    // Keep the short lease on failure so repeated public requests cannot trigger
+    // the same expensive rebuild until the cooldown expires.
+    operationalEvent('sealed','snapshot_repair_failure',{status:503});
+    return false;
+  }
 }
 
 export async function handleSealedRequest(request, env, dependencies = {}) {
@@ -221,13 +292,11 @@ export async function handleSealedRequest(request, env, dependencies = {}) {
       if (!product) throw new FeedError('This sealed product is not available in the shared catalogue.',404,null);
       return json(serveProduct(product,feed),200,{'Cache-Control':feed.last_error?'no-store':'public, max-age=300'});
     }
-    const term=query.toLowerCase();
-    const where='seen_at=?1 AND (?2=\'\' OR instr(search_text,?2)>0) AND (?3=\'\' OR product_type=?3)';
-    const count=await db.prepare(`SELECT COUNT(*) AS total FROM sealed_products WHERE ${where}`).bind(feed.fetched_at,term,type).first();
-    const result=await db.prepare(`SELECT * FROM sealed_products WHERE ${where} ORDER BY name,product_id LIMIT ?4 OFFSET ?5`).bind(feed.fetched_at,term,type,PAGE_SIZE,(page-1)*PAGE_SIZE).all();
-    return json({items:(result.results||[]).map(row=>serveProduct(row,feed)),total:count?.total||0,page,pageSize:PAGE_SIZE,fetchedAt:feed.fetched_at,lastAttemptAt:feed.last_attempt_at,lastError:feed.last_error,nextRefreshAt:feed.next_refresh_at,...attribution()},200,{'Cache-Control':feed.last_error?'no-store':'public, max-age=300'});
+    const found=await searchCatalogue(db,dependencies,now,feed,query.toLowerCase(),type,page);
+    return json({items:found.items,total:found.total,page,pageSize:PAGE_SIZE,fetchedAt:found.feed.fetched_at,lastAttemptAt:found.feed.last_attempt_at,lastError:found.feed.last_error,nextRefreshAt:found.feed.next_refresh_at,...attribution()},200,{'Cache-Control':found.feed.last_error?'no-store':'public, max-age=300'});
   } catch (error) {
     if (error instanceof FeedError) return json({error:error.message},error.status,error.retryAfter?{'Retry-After':String(error.retryAfter)}:{});
+    operationalEvent('sealed','request_failure',{status:503});
     return json({error:'The sealed price store is temporarily unavailable. Your collection remains on this device.'},503);
   }
 }
@@ -243,5 +312,5 @@ export async function refreshSealedScheduled(env, dependencies = {}) {
     const before=await db.prepare('SELECT fetched_at FROM sealed_feed WHERE id=1').first();
     const feed=await ensureFeed(db,dependencies,now);
     return {configured:true,refreshed:before?.fetched_at!==feed.fetched_at,failed:Boolean(feed.last_error)};
-  } catch { return {configured:true,refreshed:false,failed:true}; }
+  } catch { operationalEvent('sealed','scheduled_failure',{status:503}); return {configured:true,refreshed:false,failed:true}; }
 }

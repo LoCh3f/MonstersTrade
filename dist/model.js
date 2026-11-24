@@ -52,7 +52,14 @@ function list(value, label) {
   return value;
 }
 function uniqueId() {
-  return globalThis.crypto?.randomUUID?.() || `card-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const crypto = globalThis.crypto;
+  if (typeof crypto?.randomUUID === 'function') return crypto.randomUUID();
+  if (typeof crypto?.getRandomValues !== 'function') fail('Secure randomness is required to add new collection entries.');
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 }
 function timestamp(value, label, fallback = new Date().toISOString()) {
   const result = text(value, label, fallback, 50);
@@ -219,7 +226,7 @@ function entryDetails(input, binders) {
   const condition = input.condition ?? conditions[0];
   if (!conditions.includes(condition)) fail(input.kind === 'sealed' ? 'Choose a supported sealed packaging condition.' : 'Choose a supported card condition.');
   const binderId = input.binderId ?? 'main';
-  if (!binders.some(binder => binder.id === binderId)) fail('The selected binder does not exist.');
+  if (!(binders instanceof Set ? binders.has(binderId) : binders.some(binder => binder.id === binderId))) fail('The selected binder does not exist.');
   return {
     quantity: number(input.quantity ?? 1, 'Quantity', { integer: true, minimum: 1, maximum: MAX_QUANTITY }),
     cost: number(input.cost ?? 0, 'Purchase cost'),
@@ -246,13 +253,14 @@ export function normalizeState(input) {
   });
   if (!binders.length) fail('A backup must contain at least one binder.');
   if (new Set(binders.map(binder => binder.id)).size !== binders.length) fail('Binder IDs must be unique.');
+  const binderIds = new Set(binders.map(binder => binder.id));
   const collection = list(input.collection, 'Collection').map(entry => {
     object(entry, 'Collection entry');
     if (entry.quantity === undefined || entry.cost === undefined) fail('Every collection entry needs a quantity and purchase cost.');
     return {
       ...cardMetadata(entry, legacy),
       uid: requiredText(entry.uid, 'Entry ID'),
-      ...entryDetails({ ...entry, kind: legacy ? 'card' : entry.kind }, binders),
+      ...entryDetails({ ...entry, kind: legacy ? 'card' : entry.kind }, binderIds),
       addedAt: timestamp(entry.addedAt, 'Date added'),
     };
   });
@@ -299,28 +307,36 @@ export function entryIdentity(entry) {
   ]);
 }
 
+function prepareCard(card, details) {
+  const metadata = cardMetadata({ ...card, id: card.id || (card.kind === 'sealed' ? `sealed-${uniqueId()}` : card.id), ...Object.fromEntries(['variantId', 'variantLabel', 'grading', 'manualValuation'].filter(key => Object.hasOwn(details, key)).map(key => [key, details[key]])) });
+  return metadata;
+}
+function mergeCard(previous, metadata, fields) {
+  const quantity = previous.quantity + fields.quantity;
+  number(quantity, 'Combined quantity', { integer: true, minimum: 1, maximum: MAX_QUANTITY });
+  let merged = { ...previous, ...metadata, ...fields, quantity, cost: (previous.cost * previous.quantity + fields.cost * fields.quantity) / quantity };
+  if (metadata.kind === 'sealed') {
+    merged.valuationHistory = mergeValuationHistory(previous.valuationHistory, metadata.valuationHistory);
+    merged.image = metadata.image || previous.image || '';
+  }
+  const oldMarket = previous.market || legacyQuote(previous);
+  const oldDate = Date.parse(oldMarket.providerUpdatedAt);
+  const newDate = Date.parse(metadata.market.providerUpdatedAt);
+  if ((metadata.price === null && previous.price !== null) || (Number.isFinite(oldDate) && (!Number.isFinite(newDate) || newDate < oldDate))) {
+    merged = { ...merged, market: oldMarket, price: oldMarket.amount, priceUpdated: oldMarket.providerUpdatedAt || '', priceSource: oldMarket.source, lastValidMarket: previous.lastValidMarket || null };
+  }
+  return merged;
+}
+
 /** Merge identical holdings, preserving their total purchase cost without rounding. */
 export function addCard(state, card, details = {}) {
-  const metadata = cardMetadata({ ...card, id: card.id || (card.kind === 'sealed' ? `sealed-${uniqueId()}` : card.id), ...Object.fromEntries(['variantId', 'variantLabel', 'grading', 'manualValuation'].filter(key => Object.hasOwn(details, key)).map(key => [key, details[key]])) });
+  const metadata = prepareCard(card, details);
   const fields = entryDetails({ ...details, kind: metadata.kind }, state.binders);
   const identity = entryIdentity({ ...metadata, ...fields });
   const index = state.collection.findIndex(entry => entryIdentity(entry) === identity);
   let collection;
   if (index >= 0) {
-    const previous = state.collection[index];
-    const quantity = previous.quantity + fields.quantity;
-    number(quantity, 'Combined quantity', { integer: true, minimum: 1, maximum: MAX_QUANTITY });
-    let merged = { ...previous, ...metadata, ...fields, quantity, cost: (previous.cost * previous.quantity + fields.cost * fields.quantity) / quantity };
-    if (metadata.kind === 'sealed') {
-      merged.valuationHistory = mergeValuationHistory(previous.valuationHistory, metadata.valuationHistory);
-      merged.image = metadata.image || previous.image || '';
-    }
-    const oldMarket = previous.market || legacyQuote(previous);
-    const oldDate = Date.parse(oldMarket.providerUpdatedAt);
-    const newDate = Date.parse(metadata.market.providerUpdatedAt);
-    if ((metadata.price === null && previous.price !== null) || (Number.isFinite(oldDate) && (!Number.isFinite(newDate) || newDate < oldDate))) {
-      merged = { ...merged, market: oldMarket, price: oldMarket.amount, priceUpdated: oldMarket.providerUpdatedAt || '', priceSource: oldMarket.source, lastValidMarket: previous.lastValidMarket || null };
-    }
+    const merged = mergeCard(state.collection[index], metadata, fields);
     collection = state.collection.map((entry, position) => position === index ? merged : entry);
   } else {
     if (state.collection.length >= MAX_ROWS) fail('The collection is too large to import safely in this browser.');
@@ -555,7 +571,14 @@ export function importCSV(source, state = emptyState()) {
   const headers = rows.shift().map(header => header.trim());
   if (new Set(headers).size !== headers.length) fail('CSV column names must be unique.');
   for (const column of ['id', 'name', 'quantity', 'cost']) if (!headers.includes(column)) fail(`CSV is missing the ${column} column. Export a collection to see the supported format.`);
-  let result = state;
+  // The private arrays and index make this a single batch. No caller-owned row is
+  // mutated, including when a later row fails validation.
+  const collection = [...state.collection], binders = [...state.binders];
+  const identities = new Map(), binderIds = new Set(binders.map(binder => binder.id));
+  for (const [index, entry] of collection.entries()) {
+    const identity = entryIdentity(entry);
+    if (!identities.has(identity)) identities.set(identity, index);
+  }
   for (const [index, values] of rows.entries()) {
     if (values.length !== headers.length) fail(`CSV row ${index + 2} has a different number of columns from the header.`);
     const raw = Object.fromEntries(headers.map((header, column) => [header, decodeCSVText(values[column])]));
@@ -580,15 +603,27 @@ export function importCSV(source, state = emptyState()) {
       price: readNumber('price', null),
     };
     const binderId = raw.binderId || 'main';
-    if (!result.binders.some(binder => binder.id === binderId)) {
+    if (!binderIds.has(binderId)) {
       requiredText(binderId, 'Binder ID');
-      result = { ...result, binders: [...result.binders, { id: binderId, name: requiredText(raw.binderName || binderId, 'Binder name', 100) }] };
+      if (binders.length >= MAX_ROWS) fail('The CSV contains too many binders.');
+      binders.push({ id: binderId, name: requiredText(raw.binderName || binderId, 'Binder name', 100) });
+      binderIds.add(binderId);
     }
     try {
-      result = addCard(result, card, {
+      const details = {
         quantity: readNumber('quantity'), cost: readNumber('cost'), condition: raw.condition || undefined, binderId, addedAt: raw.addedAt || undefined,
-      });
+      };
+      const metadata = prepareCard(card, details);
+      const fields = entryDetails({ ...details, kind: metadata.kind }, binderIds);
+      const identity = entryIdentity({ ...metadata, ...fields });
+      const position = identities.get(identity);
+      if (position !== undefined) collection[position] = mergeCard(collection[position], metadata, fields);
+      else {
+        if (collection.length >= MAX_ROWS) fail('The collection is too large to import safely in this browser.');
+        identities.set(identity, collection.length);
+        collection.push({ ...metadata, uid: uniqueId(), ...fields, addedAt: timestamp(details.addedAt, 'Date added') });
+      }
     } catch (error) { fail(`CSV row ${index + 2}: ${error.message}`); }
   }
-  return result;
+  return { ...state, version: 2, collection, binders };
 }

@@ -13,7 +13,7 @@ const csv=(rows=[raw()])=>HEADER+'\n'+rows.map(row=>HEADER.split(',').map(key=>/
 
 function harness(t, provider) {
   const sqlite=new DatabaseSync(':memory:');
-  for(const file of ['0001_public_prices.sql','0002_active_price_catalogue.sql','0003_sealed_prices.sql']) sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
+  for(const file of ['0001_public_prices.sql','0002_active_price_catalogue.sql','0003_sealed_prices.sql','0004_price_admission.sql','0005_sealed_catalogue_snapshot.sql']) sqlite.exec(readFileSync(new URL('../migrations/'+file,import.meta.url),'utf8'));
   t.after(()=>sqlite.close());
   const db={prepare(sql){const params=[];return{bind(...values){params.push(...values);return this;},async first(){return sqlite.prepare(sql).get(...params)||null;},async all(){return{results:sqlite.prepare(sql).all(...params)};},async run(){return{meta:{changes:Number(sqlite.prepare(sql).run(...params).changes)}};}};},async batch(statements){sqlite.exec('BEGIN');try{const results=[];for(const statement of statements)results.push(await statement.run());sqlite.exec('COMMIT');return results;}catch(error){sqlite.exec('ROLLBACK');throw error;}}};
   let now=START,calls=0,upstream=provider||(()=>new Response(csv()));
@@ -186,4 +186,86 @@ test('a stalled sealed feed aborts after twelve seconds and schedules a retry',a
   t.mock.timers.tick(12000);
   assert.equal((await pending).status,503);assert.equal(signal.aborted,true);
   assert.equal(h.sqlite.prepare('SELECT failure_count FROM sealed_feed').get().failure_count,1);
+});
+
+test('search retries a concurrent feed replacement without mixing generations',async t=>{
+  const h=harness(t);await h.request();
+  const prepare=h.env.PRICES_DB.prepare.bind(h.env.PRICES_DB);
+  let replaced=false;
+  h.env.PRICES_DB.prepare=sql=>{
+    const statement=prepare(sql);
+    if(sql.includes('CROSS JOIN sealed_products')){
+      const all=statement.all.bind(statement);
+      statement.all=async()=>{
+        if(!replaced){
+          replaced=true;h.setTime(START+DAY+1);
+          h.setProvider(()=>new Response(csv([raw({product:'Replacement Box',date:'2026-11-24',cheapest_store_price:'99'})])));
+          await refreshSealedScheduled(h.env,h.deps);
+        }
+        return all();
+      };
+    }
+    return statement;
+  };
+  const response=await h.request();assert.equal(response.status,200);
+  const result=await response.json();
+  assert.equal(result.total,1);assert.deepEqual(result.items.map(item=>item.id),[ID]);
+  assert.equal(result.items[0].market.amount,99);
+  assert.equal(result.fetchedAt,new Date(START+DAY+1).toISOString());
+  assert.equal(result.items[0].unavailable,false);
+});
+
+test('snapshot and products roll back together when publication fails',async t=>{
+  const h=harness(t);await h.request();
+  const before=h.sqlite.prepare('SELECT * FROM sealed_catalogue').get();
+  h.setTime(START+DAY+1);h.setProvider(()=>new Response(csv([raw({tcgplayer_product_id:'2',date:'2026-11-24'})])));
+  h.sqlite.exec("CREATE TRIGGER reject_snapshot BEFORE UPDATE ON sealed_catalogue BEGIN SELECT RAISE(ABORT,'private-database-detail'); END");
+  const response=await h.request();assert.equal(response.status,200);
+  const result=await response.json();assert.equal(result.items[0].id,ID);
+  assert.ok(!JSON.stringify(result).includes('private-database-detail'));
+  assert.deepEqual(h.sqlite.prepare('SELECT * FROM sealed_catalogue').get(),before);
+  assert.equal(h.sqlite.prepare('SELECT COUNT(*) AS n FROM sealed_products').get().n,1);
+});
+
+test('a feed published by the old Worker after migration repairs once without another provider fetch',async t=>{
+  const h=harness(t);await h.request();
+  const replacement=new Date(START+1000).toISOString();
+  // Previous code updates products/feed but knows nothing about sealed_catalogue.
+  h.sqlite.prepare('UPDATE sealed_products SET seen_at=?,name=?,search_text=?').run(replacement,'Old writer replacement','old writer replacement');
+  h.sqlite.prepare('UPDATE sealed_feed SET fetched_at=?,next_refresh_at=?').run(replacement,new Date(START+DAY).toISOString());
+  const prepare=h.env.PRICES_DB.prepare.bind(h.env.PRICES_DB);
+  let scans=0;
+  h.env.PRICES_DB.prepare=sql=>{if(sql.includes('UPDATE sealed_catalogue SET fetched_at=') && sql.includes('json_group_array'))scans++;return prepare(sql);};
+  const responses=await Promise.all(Array.from({length:10},()=>h.request('/api/sealed?q=old%20writer')));
+  for(const response of responses){assert.equal(response.status,200);assert.equal((await response.json()).total,1);}
+  assert.equal(scans,1);assert.equal(h.calls(),1);
+  assert.equal(h.sqlite.prepare('SELECT fetched_at FROM sealed_catalogue').get().fetched_at,replacement);
+});
+
+test('a failed generation repair retains its cooldown instead of rescanning on every distinct query',async t=>{
+  const h=harness(t);await h.request();
+  h.sqlite.prepare('UPDATE sealed_feed SET fetched_at=?').run(new Date(START+1000).toISOString());
+  h.sqlite.exec("CREATE TRIGGER reject_repair BEFORE UPDATE OF payload ON sealed_catalogue BEGIN SELECT RAISE(ABORT,'synthetic failure'); END");
+  const prepare=h.env.PRICES_DB.prepare.bind(h.env.PRICES_DB);let scans=0;
+  h.env.PRICES_DB.prepare=sql=>{if(sql.includes('UPDATE sealed_catalogue SET fetched_at=') && sql.includes('json_group_array'))scans++;return prepare(sql);};
+  for(let i=0;i<10;i++)assert.equal((await h.request('/api/sealed?q=unique-'+i)).status,503);
+  assert.equal(scans,1);assert.equal(h.calls(),1);
+});
+
+test('a stale reader cannot reserve the repair lease of an already-current generation',async t=>{
+  const h=harness(t);await h.request();
+  const original=h.env.PRICES_DB,prepare=original.prepare.bind(original),replacement=new Date(START+1000).toISOString();
+  let replaced=false;
+  h.env.PRICES_DB={...original,prepare(sql){
+    if(!replaced && sql.startsWith('SELECT fetched_at,payload FROM sealed_catalogue')){
+      replaced=true;
+      h.sqlite.prepare('UPDATE sealed_feed SET fetched_at=?').run(replacement);
+      h.sqlite.prepare('UPDATE sealed_products SET seen_at=?').run(replacement);
+      h.sqlite.prepare('UPDATE sealed_catalogue SET fetched_at=?').run(replacement);
+    }
+    return prepare(sql);
+  }};
+  const response=await h.request();assert.equal(response.status,200);
+  assert.equal((await response.json()).fetchedAt,replacement);
+  assert.equal(h.sqlite.prepare('SELECT lease_until FROM sealed_catalogue').get().lease_until,'');
 });

@@ -11,7 +11,7 @@ A free Pokémon collection app with browser-local collections and a serverless p
 Use Node.js 24 (the version in `.nvmrc`) and npm. Install the pinned deployment tools, create the local price tables, and start the full app:
 
 ```sh
-npm ci
+npm ci --ignore-scripts
 npm run db:migrate:local
 npm run dev:cloudflare
 ```
@@ -71,20 +71,22 @@ A custom domain is optional and registration is a separate cost. After adding it
 | Production | `main` | [monstertrade](https://monstertrade.loch3f.workers.dev) | `monsterstrade-prices` |
 | Staging | `develop` | [monstertrade-staging](https://monstertrade-staging.loch3f.workers.dev) | `monsterstrade-prices-staging` |
 
-Staging has its own Worker, price cache, history, and schedule. Both environments use the same Cloudflare account and deployment credentials. Collections remain in each browser origin's local storage; use JSON export/import when deliberately transferring a collection between environments.
+Staging has its own Worker, price cache, history, and schedule. Both environments use the same Cloudflare account, with deployment credentials stored separately in GitHub environments `staging` and `production`. Use separate expiring tokens with the minimum available Cloudflare permissions; separate secret storage does not narrow the permissions granted by Cloudflare. Collections remain in each browser origin's local storage; use JSON export/import when deliberately transferring a collection between environments.
 
 | Workflow | Trigger | Result |
 | --- | --- | --- |
-| **CI / Checks** | Pull requests and pushes to `main`, `develop`, `release/**`, and `hotfix/**` | Validates source/configuration/assets, runs tests and an isolated local Worker smoke test, and checks both deployment bundles without cloud credentials. |
-| **CI / Git Flow** | The same CI events | On PRs, checks branch routing, Conventional Commit titles and subjects, ancestry, and production release versions. |
-| **Deploy to Cloudflare** | Successful push CI for `main` or `develop`, or a matching manual run | Verifies the latest branch revision, migrates its D1 database, publishes its Worker, and checks health. Automatic runs require the corresponding enable flag. Successful production releases receive an immutable version tag. |
+| **CI / Checks** | Pull requests and pushes to `main`, `develop`, `release/**`, and `hotfix/**` | Validates source/configuration/assets, checks high/critical dependency advisories, runs tests and an isolated local Worker smoke test, and checks both deployment bundles without cloud credentials. |
+| **CI / Git Flow** | The same CI events | Legacy PR feedback during rollout; checks branch routing, commit conventions, ancestry, and release versions. |
+| **Trusted Git Flow policy** | PR metadata events, after activation on `main` | Publishes a separate required `Git Flow` commit status from the reviewed immutable policy revision, without executing PR code. |
+| **Deploy to Cloudflare** | Successful push CI for `main` or `develop`, or a matching manual run | Independently revalidates the latest merged PR from pinned policy, migrates its D1 database, publishes its Worker, and checks health. Automatic runs require the corresponding enable flag. Successful production releases receive an immutable version tag. |
 
-Configure these under **Settings → Secrets and variables → Actions** in GitHub. The official [Cloudflare CI authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/#1-authentication) explains account-scoped tokens, and [GitHub's repository-secret guide](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#creating-secrets-for-a-repository) shows where to save them.
+Create GitHub environments `staging` and `production` under **Settings → Environments** and configure the environment secrets below. Configure repository variables under **Settings → Secrets and variables → Actions**. The official [Cloudflare CI authentication guide](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/#1-authentication) explains account-scoped tokens, and [GitHub's repository-secret guide](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets#creating-secrets-for-a-repository) shows where to save them.
 
 | Type | Name | Value |
 | --- | --- | --- |
-| Repository secret | `CLOUDFLARE_API_TOKEN` | A Cloudflare token scoped to the target account with Workers deployment permissions and **Account → D1 → Edit** for migrations. See [D1 token permissions](https://developers.cloudflare.com/d1/tutorials/import-to-d1-with-rest-api/#1-create-a-d1-api-token). |
-| Repository secret | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing the Worker and database. |
+| Environment secret (each target) | `CLOUDFLARE_DEPLOY_TOKEN` | A Cloudflare token scoped to the target account with Workers deployment permissions and **Account → D1 → Edit** for migrations. The workflow maps it to Wrangler's `CLOUDFLARE_API_TOKEN` process variable. Never create a repository secret with this new name. See [D1 token permissions](https://developers.cloudflare.com/d1/tutorials/import-to-d1-with-rest-api/#1-create-a-d1-api-token). |
+| Environment secret (each target) | `CLOUDFLARE_ACCOUNT_ID` | The Cloudflare account containing the Worker and database. |
+| Repository variable | `GIT_FLOW_POLICY_SHA` | Full SHA of the reviewed policy commit; required by trusted PR and independent pre-deployment checks. Follow [activation](docs/GIT_FLOW.md#trusted-policy-and-activation) before changing this pin. |
 | Repository variable | `CLOUDFLARE_DATABASE_ID` | The UUID of the existing `monsterstrade-prices` D1 database. |
 | Repository variable | `CLOUDFLARE_STAGING_DATABASE_ID` | The UUID of the separate `monsterstrade-prices-staging` D1 database. Must differ from production. |
 | Repository variable | `CLOUDFLARE_DEPLOY_ENABLED` | Set to `true` when automatic production deployment after successful CI is wanted. Leave absent until setup is complete. |
@@ -94,13 +96,17 @@ Configure these under **Settings → Secrets and variables → Actions** in GitH
 
 Use HTTPS origins with no path beyond `/`, credentials, query, or fragment. Create production D1 once using the preceding instructions. Create staging D1 once with `npx wrangler d1 create monsterstrade-prices-staging`, then save its returned UUID in `CLOUDFLARE_STAGING_DATABASE_ID`. An existing database can be found with `npx wrangler d1 list`; do not recreate it on each deployment.
 
-Keep credentials in GitHub secrets, not in YAML or the repository. Deployment injects database overrides into temporary configuration under ignored `.wrangler/deploy-*/`, then removes it; it never edits `wrangler.jsonc`. The checked-in placeholders support uncredentialed CI. Passing `--dry-run`, including with `--migrate`, never applies remote migrations. With both database IDs available in the local environment, `npm run deploy -- --staging --migrate` migrates and publishes staging; the script rejects a shared production/staging database.
+Keep credentials in GitHub secrets, not in YAML or the repository. Deployment injects database overrides and the full verified `DEPLOY_SHA` as Worker variable `DEPLOY_COMMIT` into temporary configuration under ignored `.wrangler/deploy-*/`, then removes it; it never edits `wrangler.jsonc`. The checked-in placeholders support uncredentialed CI. Passing `--dry-run`, including with `--migrate`, never applies remote migrations. With both database IDs available in the local environment, `npm run deploy -- --staging --migrate` migrates and publishes staging; the script rejects a shared production/staging database.
 
 For a manual deployment, use **Actions → Deploy to Cloudflare → Run workflow** and select `main` with target `production`, or `develop` with target `staging`. The selected branch and target must agree. Manual runs repeat validation before deployment. Once each environment is configured, enable its automatic deployment flag. Only the latest successful push CI revision of that environment's branch can deploy automatically; stale revisions are rejected. Deployments within each environment run sequentially.
 
-PRs and other branches receive no deployment credentials. Deploy jobs have read-only GitHub permissions. Only the production tagging job receives `contents: write`: after deployment and health succeed, it creates `vX.Y.Z` at the deployed SHA. A tag already pointing to that SHA is accepted; a conflicting tag fails preflight and is never moved. See [release and recovery guidance](docs/GIT_FLOW.md#releases-and-hotfixes).
+PRs and other branches receive no deployment credentials. Deploy jobs have read-only GitHub permissions. Only the production tagging job receives `contents: write`: after deployment, schema health, and an exact `health.deployCommit` match succeed, it creates `vX.Y.Z` at the deployed SHA. A tag already pointing to that SHA is accepted; a conflicting tag fails preflight and is never moved. See [release and recovery guidance](docs/GIT_FLOW.md#releases-and-hotfixes).
 
-The workflows use repository secrets and do not require a GitHub environment feature or paid-plan upgrade. Branch protection and other repository rules are separate GitHub settings, and their availability depends on the repository's visibility and plan. See [repository settings](CONTRIBUTING.md#repository-settings) for the intended merge policy. Workflow files alone do not enforce it.
+The deploy job selects its GitHub environment only after independent policy validation. Restrict `production` to workflow ref `main`; restrict `staging` to `main` and `develop`. A `workflow_run` deployment uses default `main` as its workflow ref even for a verified `develop` candidate, while manual staging uses `develop`. The independent policy and release gates verify the actual target branch and SHA. Environment and branch rules are separate GitHub settings; feature availability depends on visibility and plan. See [repository settings](CONTRIBUTING.md#repository-settings) for the intended merge policy. Workflow files alone do not enforce it.
+
+The install steps use `npm ci --ignore-scripts`; the credentialed job restores no dependency cache. This blocks dependency install hooks from persisting into later steps, but deployment tooling itself still runs with deployment privileges. Review locked dependency changes. CI fails on high or critical npm advisories; GitHub secret scanning, push protection, and Dependabot alerts are repository settings that should stay enabled.
+
+During rollout, configure `CLOUDFLARE_DEPLOY_TOKEN` in each environment and set repository variable `GIT_FLOW_POLICY_SHA` before the new default-branch workflow activates. Keep the legacy repository `CLOUDFLARE_API_TOKEN` only for the old default workflow until the replacement has reached `main` and both environment deployments have been verified; then remove the repository copy and rotate the superseded token. The new workflow never reads that legacy key, so an unconfigured environment fails before deployment instead of falling back to the broad repository credential. Do not define `CLOUDFLARE_DEPLOY_TOKEN` at repository or organization scope. A feature-branch-only workflow edit does not activate production hardening. See [policy activation](docs/GIT_FLOW.md#trusted-policy-and-activation).
 
 A failed deployment or post-deployment health check needs investigation before retrying. A successful migration is not undone if publishing fails. Likewise, rolling back the Worker does not undo D1 schema changes; write compatible migrations and confirm database state before a rollback. The public price database can be rebuilt from sources going forward, but discarded historical observations are not automatically recoverable.
 
