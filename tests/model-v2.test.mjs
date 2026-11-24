@@ -10,6 +10,17 @@ const valuation = (amount = 250) => ({ amount, currency: 'EUR', updatedAt: date,
 const bundle = (overrides = {}) => ({ cardId: 'sv03.5-199', reference: reference(), variants: [], fetchedAt: date, lastAttemptAt: date, lastError: null, ...overrides });
 const option = (id, mapping = 'matched') => ({ id, label: id === 'reverse' ? 'Reverse holo' : 'Normal', type: id, stamp: [], foil: null, quote: reference({ amount: id === 'reverse' ? 180 : 100, mapping }) });
 
+test('a familiar Pokémon title survives browser normalization and CSV round trips', () => {
+  const state = addCard(emptyState(), card({
+    id: 'SV2a-201', name: 'リザードンex', pokemonName: 'Charizard', localId: '201', setId: 'SV2a', lang: 'ja',
+  }));
+  const restored = importCSV(exportCSV(normalizeState(state)));
+  const [saved] = restored.collection;
+  assert.equal(saved.name, 'リザードンex');
+  assert.equal(saved.pokemonName, 'Charizard');
+  assert.equal(saved.lang, 'ja');
+});
+
 test('v1 migrates without guessing variants or changing IDs, quantities, weighted costs and history', () => {
   const legacy = {
     version: 1,

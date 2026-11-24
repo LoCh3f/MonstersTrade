@@ -186,6 +186,9 @@ test('Japanese set qualifiers and the printed ex spelling select the correct pri
   assert.equal(urls[2].searchParams.get('name'), 'eq:リザードンEX');
   await searchCards('リザードンex', 'ja');
   assert.equal(urls[3].searchParams.get('name'), 'リザードンex');
+  await searchCards('Pikachu Pokémon Card 151', 'ja');
+  assert.equal(urls[4].searchParams.get('set.id'), 'eq:SV2a');
+  assert.equal(urls[4].searchParams.get('dexId'), 'eq:25');
 });
 
 test('localized name fallback keeps its pagination when Pokédex metadata is incomplete', async t => {

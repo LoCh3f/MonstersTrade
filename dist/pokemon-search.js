@@ -5,6 +5,17 @@ const nativeColumns = { ja: 1, ko: 2, 'zh-tw': 3, 'zh-cn': 4 };
 const cardSuffix = /(V-UNION|VSTAR|VMAX|GX|EX|V)$/i;
 const searchSuffix = /\s+(V-UNION|VSTAR|VMAX|GX|EX|V)$/i;
 const nameKey = name => name.normalize('NFKD').replace(/\p{M}|[^\p{L}\p{N}♀♂]/gu, '').toLowerCase();
+const asianScript = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}]/u;
+const japaneseSetNames = new Map([
+  ['sv2a', 'Pokémon Card 151'],
+  ['sv4a', 'Shiny Treasure ex'],
+  ['sv8a', 'Terastal Festival ex'],
+]);
+const japaneseSetQualifiers = [
+  [/\s+(?:Pok[eé]mon(?:\s+Card)?\s+)?151$/i, 'sv2a'],
+  [/\s+Shiny\s+Treasure(?:\s+ex)?$/i, 'sv4a'],
+  [/\s+Terastal\s+Festival(?:\s+ex)?$/i, 'sv8a'],
+];
 // Common Trainer and Basic Energy names present in TCGdex's Japanese catalogue.
 const japaneseCardNames = [
   ['ボスの指令', 'Boss’s Orders', 'Ordini del Capo'],
@@ -51,9 +62,20 @@ function findSpecies(name) {
 
 export function catalogueAlias(term, lang) {
   if (marketLanguage(lang) === 'en') return null;
-  const set = term.match(/^(.+)\s+(151|[a-z]+\d[a-z0-9.+-]*)$/i);
-  const input = set?.[1] ?? term;
-  const setCode = set?.[2] ?? '';
+  let input = term;
+  let setCode = '';
+  for (const [pattern, code] of lang === 'ja' ? japaneseSetQualifiers : []) {
+    const match = term.match(pattern);
+    if (!match || !match.index) continue;
+    input = term.slice(0, match.index);
+    setCode = code;
+    break;
+  }
+  if (!setCode) {
+    const set = term.match(/^(.+)\s+(151|[a-z]+\d[a-z0-9.+-]*)$/i);
+    input = set?.[1] ?? term;
+    setCode = set?.[2] ?? '';
+  }
   if (lang === 'ja') {
     const key = nameKey(input);
     const trainer = japaneseCardNames.find(([, ...names]) => names.some(name => nameKey(name) === key));
@@ -100,6 +122,16 @@ export function pokemonNameForIds(ids) {
   return [...new Set(ids.map(id => speciesNames[id]?.[0]).filter(Boolean))].join(' & ');
 }
 
+export function catalogueCardTitle(card) {
+  const alias = latinCardName(card);
+  if (alias) return alias;
+  if (card.kind === 'sealed' || marketLanguage(card.lang) === 'en' || !asianScript.test(card.name)) return card.name;
+  return card.localId ? `Card #${card.localId}` : `Card ${card.id}`;
+}
+
 export function catalogueSetName(name, id, lang) {
-  return lang === 'ja' && id?.toLowerCase() === 'sv2a' ? 'Pokémon Card 151' : name;
+  const known = lang === 'ja' && id ? japaneseSetNames.get(id.toLowerCase()) : '';
+  if (known) return known;
+  if (marketLanguage(lang) !== 'en' && id && asianScript.test(name)) return `Set ${id}`;
+  return name;
 }

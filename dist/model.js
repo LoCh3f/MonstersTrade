@@ -20,7 +20,7 @@ const MAX_MONEY = 1e9;
 const MAX_QUANTITY = 1e6;
 const MAX_VALUATIONS = 1000;
 const JSON_COLUMNS = ['grading', 'manualValuation', 'market', 'lastValidMarket', 'variants', 'valuationHistory'];
-const CSV_COLUMNS = ['id', 'name', 'localId', 'image', 'setId', 'setName', 'setTotal', 'rarity', 'price', 'priceUpdated', 'lang', 'quantity', 'cost', 'condition', 'binderId', 'binderName', 'addedAt', 'variantId', 'variantLabel', 'kind', 'productType', 'edition', 'productCode', 'productUrl', 'sourceProductType', 'game', 'storesInStock', ...JSON_COLUMNS];
+const CSV_COLUMNS = ['id', 'name', 'localId', 'image', 'setId', 'setName', 'setTotal', 'rarity', 'price', 'priceUpdated', 'lang', 'quantity', 'cost', 'condition', 'binderId', 'binderName', 'addedAt', 'variantId', 'variantLabel', 'kind', 'productType', 'edition', 'productCode', 'productUrl', 'sourceProductType', 'game', 'storesInStock', ...JSON_COLUMNS, 'pokemonName'];
 const SNAPSHOT_REASONS = ['visit', 'collection', 'prices', 'legacy'];
 
 export function emptyState() {
@@ -203,6 +203,7 @@ function cardMetadata(input, legacy = false) {
     valuationHistory: sealed ? valuationHistory(input.valuationHistory, personal) : [],
     id: requiredText(input.id, 'Card ID'),
     name: requiredText(input.name, 'Card name', 300),
+    ...(!sealed && input.pokemonName ? { pokemonName: text(input.pokemonName, 'Pokémon name', '', 300) } : {}),
     localId: text(input.localId, 'Card number', '', 100),
     image,
     setId: text(input.setId, 'Set ID', '', 200),

@@ -156,7 +156,7 @@ export async function searchCards(query, lang = 'en', page = 1) {
 
   const filters = {};
   if (pokemon.setCode) {
-    const code = pokemon.setCode === '151' && lang === 'ja' ? 'sv2a' : pokemon.setCode.toLowerCase();
+    const code = pokemon.setCode.toLowerCase();
     const set = (await getSets(lang)).find(row => typeof row?.id === 'string' && row.id.toLowerCase() === code);
     if (!set) return [];
     filters['set.id'] = `eq:${set.id}`;
