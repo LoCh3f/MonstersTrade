@@ -1,11 +1,11 @@
 export const CATALOGUE_LANGUAGES = Object.freeze([
   { code: 'en', label: 'English', example: 'Pikachu' },
   { code: 'it', label: 'Italian', example: 'Pikachu' },
-  { code: 'ja', label: 'Japanese', example: 'ピカチュウ' },
-  { code: 'ko', label: 'Korean', example: '비구술' },
-  { code: 'zh-tw', label: 'Traditional Chinese', example: '皮卡丘' },
-  { code: 'zh-cn', label: 'Simplified Chinese', example: '皮卡丘' },
-  { code: 'th', label: 'Thai', example: 'พิคาชู' },
+  { code: 'ja', label: 'Japanese', example: 'Pikachu' },
+  { code: 'ko', label: 'Korean', example: 'Surskit' },
+  { code: 'zh-tw', label: 'Traditional Chinese', example: 'Pikachu' },
+  { code: 'zh-cn', label: 'Simplified Chinese', example: 'Exeggcute' },
+  { code: 'th', label: 'Thai', example: 'Cacnea' },
   { code: 'id', label: 'Indonesian', example: 'Pikachu' },
 ]);
 const ASIAN_LANGUAGES = new Set(CATALOGUE_LANGUAGES.slice(2).map(({code}) => code));

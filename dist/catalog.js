@@ -1,5 +1,6 @@
 /** TCGdex public catalogue. Market estimates are Cardmarket trends in EUR. */
 import { providerMarketComparison } from './pricing.js';
+import { catalogueAlias, pokemonNameForIds } from './pokemon-search.js';
 
 const API = 'https://api.tcgdex.net/v2';
 const TIMEOUT_MS = 12_000;
@@ -21,7 +22,7 @@ function language(value) {
 
 function cardId(value) {
   const id = String(value ?? '').trim();
-  if (!id || id.length > 100 || !/^[a-zA-Z0-9.\-]+$/.test(id)) {
+  if (!id || id.length > 100 || id.includes('..') || !/^[a-zA-Z0-9.+-]+$/.test(id)) {
     throw new Error('Enter a valid TCGdex card or set ID.');
   }
   return id;
@@ -114,6 +115,7 @@ export function normalizeCard(raw, lang = 'en') {
   return {
     id: raw.id,
     name: raw.name,
+    pokemonName: pokemonNameForIds(raw.dexId),
     localId: String(raw.localId ?? ''),
     image: imageBase(raw.image),
     setId: typeof raw.set?.id === 'string' ? raw.set.id : '',
@@ -129,22 +131,51 @@ export function normalizeCard(raw, lang = 'en') {
   };
 }
 
+async function cardList(filters, lang, page, pokemonName = '') {
+  const params = new URLSearchParams({ ...filters, 'pagination:page': String(page), 'pagination:itemsPerPage': '24' });
+  const data = await request(`${lang}/cards?${params}`, { ttl: 600_000 });
+  if (!Array.isArray(data)) throw new Error('The catalogue could not return search results. Please try again.');
+  return data.filter(card => card && typeof card.id === 'string' && typeof card.name === 'string').map(card => {
+    const localId = String(card.localId ?? '');
+    return {
+      id: card.id, name: card.name, pokemonName, localId, image: imageBase(card.image), lang,
+      setId: localId && card.id.endsWith(`-${localId}`) ? card.id.slice(0, -localId.length - 1) : '',
+    };
+  });
+}
+
 export async function searchCards(query, lang = 'en', page = 1) {
   const term = String(query ?? '').trim().slice(0, 100);
   if (!term) return [];
   const pageNumber = Number(page);
   if (!Number.isInteger(pageNumber) || pageNumber < 1) throw new Error('Choose a valid catalogue page.');
-  if (/^[a-z0-9.]+(?:-[a-z0-9.]+)*-\d+[a-z]?$/i.test(term)) return pageNumber === 1 ? [await getCard(term, lang)] : [];
-  const params = new URLSearchParams({ name: term, 'pagination:page': String(pageNumber), 'pagination:itemsPerPage': '24' });
-  const data = await request(`${language(lang)}/cards?${params}`, { ttl: 600_000 });
-  if (!Array.isArray(data)) throw new Error('The catalogue could not return search results. Please try again.');
-  return data.filter(card => card && typeof card.id === 'string' && typeof card.name === 'string').map(card => ({
-    id: card.id,
-    name: card.name,
-    localId: String(card.localId ?? ''),
-    image: imageBase(card.image),
-    lang,
-  }));
+  lang = language(lang);
+  if (/^[a-z0-9.+]+(?:-[a-z0-9.+]+)*-\d+[a-z]?$/i.test(term)) return pageNumber === 1 ? [await getCard(term, lang)] : [];
+  const pokemon = catalogueAlias(term, lang);
+  if (!pokemon) return cardList({ name: term }, lang, pageNumber);
+
+  const filters = {};
+  if (pokemon.setCode) {
+    const code = pokemon.setCode === '151' && lang === 'ja' ? 'sv2a' : pokemon.setCode.toLowerCase();
+    const set = (await getSets(lang)).find(row => typeof row?.id === 'string' && row.id.toLowerCase() === code);
+    if (!set) return [];
+    filters['set.id'] = `eq:${set.id}`;
+  }
+  if (!pokemon.id) return cardList({ ...filters, name: pokemon.nativeName }, lang, pageNumber);
+  const suffix = pokemon.suffix.toUpperCase();
+  if (lang === 'ja' && suffix === 'EX' && pokemon.nativeName) {
+    // TCGdex groups ex and EX under the same suffix. The printed title distinguishes those eras.
+    const printedSuffix = pokemon.suffix === 'EX' ? 'EX' : 'ex';
+    return cardList({ ...filters, name: `eq:${pokemon.nativeName}${printedSuffix}` }, lang, pageNumber, pokemon.name);
+  }
+  if (suffix) filters.suffix = `eq:${suffix}`;
+  const dexFilters = { ...filters, dexId: `eq:${pokemon.id}` };
+  if (!pokemon.nativeName) return cardList(dexFilters, lang, pageNumber, pokemon.name);
+
+  // Base the fallback on page one so all pages use the same query strategy.
+  const first = await cardList(dexFilters, lang, 1, pokemon.name);
+  if (first.length) return pageNumber === 1 ? first : cardList(dexFilters, lang, pageNumber, pokemon.name);
+  return cardList({ ...filters, name: pokemon.nativeName }, lang, pageNumber, pokemon.name);
 }
 
 export async function getCard(id, lang = 'en', force = false) {

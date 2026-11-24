@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { latinCardName } from '../dist/pokemon-search.js';
 
 let moduleNumber = 0;
 const freshCatalog = () => import(`../dist/catalog.js?test=${++moduleNumber}`);
@@ -147,6 +148,76 @@ test('direct card ID search stays in the selected catalogue and preserves the re
   assert.equal(result.lang, 'ja');
   assert.deepEqual(await searchCards('sv2a-025', 'ja', 2), []);
   assert.deepEqual(requests, ['https://api.tcgdex.net/v2/ja/cards/sv2a-025']);
+});
+
+test('a Latin Pokémon name searches the selected Asian catalogue by exact Pokédex ID', async t => {
+  const { searchCards } = await freshCatalog();
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    urls.push(new URL(url));
+    return response([{ id: 'SV2a-025', name: 'ピカチュウ', localId: '025' }]);
+  });
+  const [result] = await searchCards('Pika', 'ja');
+  assert.equal(urls.length, 1);
+  assert.equal(urls[0].pathname, '/v2/ja/cards');
+  assert.equal(urls[0].searchParams.get('dexId'), 'eq:25');
+  assert.equal(result.name, 'ピカチュウ');
+  assert.equal(result.id, 'SV2a-025');
+  assert.equal(result.setId, 'SV2a');
+  assert.equal(result.lang, 'ja');
+  assert.equal(latinCardName(result), 'Pikachu');
+  assert.equal(latinCardName({ name: 'ミュウツー&ミュウGX', lang: 'ja' }), 'Mewtwo & Mew GX');
+});
+
+test('Japanese set qualifiers and the printed ex spelling select the correct printings', async t => {
+  const { searchCards } = await freshCatalog();
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const parsed = new URL(url);
+    urls.push(parsed);
+    if (parsed.pathname.endsWith('/sets')) return response([{ id: 'SV2a', name: 'ポケモンカード151' }]);
+    return response([{ id: 'SV2a-201', name: 'リザードンex', localId: '201' }]);
+  });
+  const [card] = await searchCards('Charizard ex 151', 'ja');
+  assert.equal(latinCardName(card), 'Charizard ex');
+  assert.equal(urls[1].searchParams.get('set.id'), 'eq:SV2a');
+  assert.equal(urls[1].searchParams.get('name'), 'eq:リザードンex');
+  await searchCards('Charizard EX', 'ja');
+  assert.equal(urls[2].searchParams.get('name'), 'eq:リザードンEX');
+  await searchCards('リザードンex', 'ja');
+  assert.equal(urls[3].searchParams.get('name'), 'リザードンex');
+});
+
+test('localized name fallback keeps its pagination when Pokédex metadata is incomplete', async t => {
+  const { searchCards } = await freshCatalog();
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const params = new URL(url).searchParams;
+    urls.push(params);
+    return response(params.has('dexId') ? [] : [{ id: 'SV4M-001', name: '비구술', localId: '001' }]);
+  });
+  const [card] = await searchCards('Surskit', 'ko', 2);
+  assert.equal(card.lang, 'ko');
+  assert.equal(latinCardName(card), 'Surskit');
+  assert.equal(urls[0].get('dexId'), 'eq:283');
+  assert.equal(urls[0].get('pagination:page'), '1');
+  assert.equal(urls[1].get('name'), '비구술');
+  assert.equal(urls[1].get('pagination:page'), '2');
+});
+
+test('verified Italian Trainer names search Japanese printings without changing the original title', async t => {
+  const { searchCards } = await freshCatalog();
+  const urls = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    urls.push(new URL(url));
+    return response([{ id: 'SV-P-016', name: 'ふしぎなアメ', localId: '016' }]);
+  });
+  const [card] = await searchCards('Caramella Rara', 'ja');
+  assert.equal(card.name, 'ふしぎなアメ');
+  assert.equal(card.lang, 'ja');
+  assert.equal(latinCardName(card), 'Rare Candy');
+  assert.equal(urls[0].searchParams.get('name'), 'ふしぎなアメ');
+  assert.equal(urls[0].searchParams.get('dexId'), null);
 });
 
 test('network and provider failures have actionable messages and can be retried', async t => {

@@ -113,6 +113,7 @@ A failed deployment or post-deployment health check needs investigation before r
 ## Features
 
 - Search by name or catalogue card ID and browse sets in English, Italian, Japanese, Korean, Traditional Chinese, Simplified Chinese, Thai, and Indonesian. Card details and images vary by language and depend on [TCGdex coverage](https://tcgdex.dev/status).
+- Use English, Italian, or romanized Japanese Pokémon names in the Asian catalogues. For example, choose Japanese and search for `Pikachu SV2a` or `Charizard ex 151`. Results show a Latin-script Pokémon name when available alongside the original printed title. Common Japanese Trainer and Basic Energy cards also have English and Italian search aliases.
 - Search sealed products by name, set and type: booster packs, booster boxes, Elite Trainer Boxes, collections, tins, blisters and bundles. Track quantities as whole sealed products, with per-product costs and packaging condition. Filter cards and sealed holdings separately in the collection.
 - Add custom sealed products with edition, language, product code and source link. Record dated personal valuations and review their local history, including multiple observations on the same day.
 - Record the exact catalogue variant where available, including finishes and special prints. Different variants, grading records, and personal valuation evidence remain separate entries.
@@ -208,3 +209,5 @@ This version has no application accounts, cloud collection synchronization, team
 The Monstertrade name and blue-and-orange logo were supplied by the app owner. The original logo is bundled at `dist/assets/monstertrade-logo.jpg`. Free access to the app is not a source-code license and does not grant permission to redistribute the logo, card artwork, or product photography. No project source license has been selected yet.
 
 TCGdex's [card database](https://github.com/tcgdex/cards-database) is MIT licensed. Pokémon names, card artwork, and related marks belong to their respective rights holders; the database license does not transfer ownership of those assets. Monstertrade is independent of DarkDex, Nintendo, The Pokémon Company, and TCGdex. No DarkDex application source or branded artwork is bundled.
+
+The browser's cross-language species lookup uses [PokéAPI species names](https://github.com/PokeAPI/pokeapi/blob/de6760be38b60a3024f1d9054330ff265f0dc619/data/v2/csv/pokemon_species_names.csv). The [PokéAPI license](dist/POKEAPI-LICENSE.txt) is included with the app.
