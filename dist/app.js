@@ -69,7 +69,10 @@ try {
 let page = pages[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard';
 let featured = [], query = '', searchPage = 1, searchResults = [], searchError = '', searching = false, searchTicket = 0, setView = null;
 let lastSetRequest = null, listingSets = false, catalogueSets = [];
-let collectionQuery = '', binderFilter = 'all', kindFilter = 'all', sort = 'recent', view = 'grid', range = '30';
+let collectionQuery = '', binderFilter = 'all', kindFilter = 'all', languageFilter = '', setFilter = '', valuationFilter = '';
+let sort = 'recent', view = 'grid', range = '30', collectionPage = 1;
+const selectedEntries = new Set();
+const COLLECTION_PAGE_SIZE = 48;
 let sealedQuery = '', sealedType = '', sealedPage = 1, sealedResult = null, sealedError = '', sealedLoading = false, sealedTicket = 0;
 let modalCard = null, modalEntry = null, modalWish = null, modalMode = 'collect', modalTicket = 0;
 let modalBundle = null, modalWarning = '', modalDraft = null, modalHistoryTicket = 0;
@@ -112,6 +115,10 @@ function commit(next, snapshot = false, reason = 'collection') {
   }
   catch { storageWarning = 'Your browser could not save these changes. Export a JSON backup before closing this page.'; }
   state = clean;
+  if(selectedEntries.size){
+    const remaining=new Set(state.collection.map(entry=>entry.uid));
+    for(const uid of selectedEntries)if(!remaining.has(uid))selectedEntries.delete(uid);
+  }
   render();
 }
 function navigate(next) {
@@ -147,10 +154,10 @@ function renderPage() {
 function dashboard() {
   const t=totals(state);
   const stats = [
-    ['Estimated value',euro(t.value),'wallet',t.unpricedQuantity?`${num(t.unpricedQuantity)} items without a valuation`:'References + personal valuations'],
+    ['Estimated value',t.pricedQuantity?euro(t.value):'—','wallet',t.unpricedQuantity?`${num(t.unpricedQuantity)} items without a valuation`:'References + personal valuations'],
     ['Purchase cost',euro(t.cost),'box','Your recorded purchase costs'],
     ['Items collected',num(t.quantity),'cards',`${num(state.collection.filter(c=>c.kind!=='sealed').reduce((n,c)=>n+c.quantity,0))} cards · ${num(state.collection.filter(c=>c.kind==='sealed').reduce((n,c)=>n+c.quantity,0))} sealed`],
-    ['Estimated difference',`${t.profit>0?'+':''}${euro(t.profit)}`,'trend',t.quantity?'Value minus cost · valued items only':'Your collection starts here'],
+    ['Estimated difference',signedEuro(t.pricedQuantity?t.profit:null),'trend',t.quantity?'Value minus cost · valued items only':'Your collection starts here'],
   ];
   const valuable=[...state.collection].filter(c=>effectivePrice(c)!==null).sort((a,b)=>effectivePrice(b)*b.quantity-effectivePrice(a)*a.quantity).slice(0,3);
   return `${heading('A home for every card.', 'Your collection, a little more connected.',button('Import','import','upload','subtle')+button('Add sealed','discover-sealed','box','subtle')+button('Add cards','discover','plus','primary'))}
@@ -175,12 +182,13 @@ function cardTile(card, type = 'catalog') {
   const isOwned = state.collection.some(c=>c.id===card.id&&c.lang===(card.lang||lang));
   const knownPrice = Object.hasOwn(card,'price');
   const value=type==='collection'?effectivePrice(card):card.price;
-  return `<article class="pokemon-card"><button class="card-open" ${attrs} aria-label="View ${esc(card.name)}"><div class="card-art">${art(card)}${type==='collection'?`<span class="card-badge">${card.quantity} owned</span>`:isOwned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(card.name)}</div><div class="card-set">${esc(card.setName||'Pokémon TCG')} ${card.localId?`· #${esc(card.localId)}`:''}</div></button><div class="card-bottom"><span class="card-price">${knownPrice?(value==null?'Not valued':type==='catalog'&&marketLanguage(card.lang)!=='en'?'View prices':euro(value)):'View details'}</span><button class="icon-button" ${attrs} aria-label="${type==='collection'?'Edit':'Add'} ${esc(card.name)}">${icon(type==='collection'?'chevron':'plus')}</button></div>${type==='collection'?`<div class="card-quantity">${esc(identityLabel(card))}</div>${priceBadge(card)}`:''}</article>`;
+  const select=type==='collection'?entryCheckbox(card):'';
+  return `<article class="pokemon-card">${select}<button class="card-open" ${attrs} aria-label="View ${esc(card.name)}"><div class="card-art">${art(card)}${type==='collection'?`<span class="card-badge">${card.quantity} owned</span>`:isOwned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(card.name)}</div><div class="card-set">${esc(card.setName||'Pokémon TCG')} ${card.localId?`· #${esc(card.localId)}`:''}</div></button><div class="card-bottom"><span class="card-price">${knownPrice?(value==null?'Not valued':type==='catalog'&&marketLanguage(card.lang)!=='en'?'View prices':euro(value)):'View details'}</span><button class="icon-button" ${attrs} aria-label="${type==='collection'?'Edit':'Add'} ${esc(card.name)}">${icon(type==='collection'?'chevron':'plus')}</button></div>${type==='collection'?`<div class="card-quantity">${esc(identityLabel(card))}</div>${priceBadge(card)}`:''}</article>`;
 }
 function sealedTile(product, owned=false) {
   const attrs=owned?`data-entry="${esc(product.uid)}"`:`data-sealed="${esc(product.id)}"`;
   const amount=owned?effectivePrice(product):product.market?.amount;
-  return `<article class="pokemon-card sealed-tile"><button class="card-open" ${attrs} aria-label="View ${esc(product.name)}"><div class="card-art">${art(product)}<span class="card-badge">${owned?`${product.quantity} owned`:esc(SEALED_TYPES.find(t=>t.id===product.productType)?.label||'Sealed')}</span></div><div class="card-name">${esc(product.name)}</div><div class="card-set">${esc(product.setName)}</div></button><div class="card-bottom"><span class="card-price">${amount==null?'Not valued':euro(amount)}</span><button class="icon-button" ${attrs} aria-label="${owned?'Edit':'Add'} ${esc(product.name)}">${icon(owned?'chevron':'plus')}</button></div><div class="card-quantity">${owned?esc(sealedIdentity(product)):'EU retail · language unspecified'}</div>${owned?priceBadge(product):`<span class="price-tag ${quoteStatus(product.market)==='current'?'':'caution'}">${product.market?.lastError?'Update failed':product.market?.amount==null?'No in-stock retail reference':quoteStatus(product.market)==='stale'?'Older retail price':'Lowest in-stock store price'}</span>`}</article>`;
+  return `<article class="pokemon-card sealed-tile">${owned?entryCheckbox(product):''}<button class="card-open" ${attrs} aria-label="View ${esc(product.name)}"><div class="card-art">${art(product)}<span class="card-badge">${owned?`${product.quantity} owned`:esc(SEALED_TYPES.find(t=>t.id===product.productType)?.label||'Sealed')}</span></div><div class="card-name">${esc(product.name)}</div><div class="card-set">${esc(product.setName)}</div></button><div class="card-bottom"><span class="card-price">${amount==null?'Not valued':euro(amount)}</span><button class="icon-button" ${attrs} aria-label="${owned?'Edit':'Add'} ${esc(product.name)}">${icon(owned?'chevron':'plus')}</button></div><div class="card-quantity">${owned?esc(sealedIdentity(product)):'EU retail · language unspecified'}</div>${owned?priceBadge(product):`<span class="price-tag ${quoteStatus(product.market)==='current'?'':'caution'}">${product.market?.lastError?'Update failed':product.market?.amount==null?'No in-stock retail reference':quoteStatus(product.market)==='stale'?'Older retail price':'Lowest in-stock store price'}</span>`}</article>`;
 }
 function sealedCatalog() {
   return `${heading('Sealed. Collected. Tracked.','Booster packs, boxes, Elite Trainer Boxes, tins and collections.',button('Add custom product','new-sealed','plus','primary'))}<div class="notice">EU retail asking prices from stores with stock. These are shopping references, not completed sales or guaranteed resale values. Product language is not specified by this source.</div><form id="sealed-search-form" class="toolbar"><div class="search-field">${icon('search')}<input id="sealed-query" name="query" aria-label="Search sealed products" placeholder="Search a product or set…" maxlength="100" value="${esc(sealedQuery)}"></div><div class="toolbar-group"><select id="sealed-type" name="type" aria-label="Sealed product type"><option value="">All sealed products</option>${SEALED_TYPES.map(t=>`<option value="${t.id}" ${sealedType===t.id?'selected':''}>${esc(t.label)}</option>`).join('')}</select><button class="button primary" type="submit">${icon('search')}Search</button></div></form><div id="sealed-results">${sealedResults()}</div><div class="card-footer-note">${sealedAttribution()}<p>Missing a product? Add it manually and record dated valuations with source links.</p></div>`;
@@ -200,17 +208,109 @@ async function runSealedSearch() {
   finally{if(ticket===sealedTicket){sealedLoading=false;updateSealedResults();}}
 }
 function updateSealedResults(){const target=document.querySelector('#sealed-results');if(target)target.innerHTML=sealedResults();}
+function entryCheckbox(entry) {
+  return `<label class="entry-select"><input type="checkbox" data-select-entry="${esc(entry.uid)}" aria-label="Select ${esc(entry.name)}" ${selectedEntries.has(entry.uid)?'checked':''}></label>`;
+}
+
+function filterOptions(entries, selected) {
+  return [...entries].sort(([,a],[,b])=>a.localeCompare(b)).map(([id,label])=>
+    `<option value="${esc(id)}" ${id===selected?'selected':''}>${esc(label)}</option>`).join('');
+}
+
+const setKey = entry => `${entry.lang}:${entry.setId}`;
 function collection() {
-  return `${heading('My collection',`${num(totals(state).quantity)} items, countless stories. Cards and sealed products together.`,button('Refresh prices','refresh','refresh','subtle')+button('Add sealed','discover-sealed','box','subtle')+button('Add cards','discover','plus','primary'))}${coveragePanel(state)}
-  <div class="toolbar"><div class="search-field">${icon('search')}<input id="collection-search" aria-label="Search your collection" placeholder="Search your collection…" value="${esc(collectionQuery)}"></div><div class="toolbar-group"><select id="kind-filter" aria-label="Filter by item type"><option value="all" ${kindFilter==='all'?'selected':''}>Cards & sealed</option><option value="card" ${kindFilter==='card'?'selected':''}>Cards only</option><option value="sealed" ${kindFilter==='sealed'?'selected':''}>Sealed only</option></select><select id="binder-filter" aria-label="Filter by binder"><option value="all">All binders</option>${state.binders.map(b=>`<option value="${esc(b.id)}" ${binderFilter===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select><select id="sort" aria-label="Sort collection"><option value="recent" ${sort==='recent'?'selected':''}>Recently added</option><option value="value" ${sort==='value'?'selected':''}>Highest value</option><option value="name" ${sort==='name'?'selected':''}>Name A–Z</option></select><div class="view-toggle" aria-label="Collection view"><button data-view="grid" class="${view==='grid'?'active':''}" aria-label="Grid view" aria-pressed="${view==='grid'}">${icon('home')}</button><button data-view="list" class="${view==='list'?'active':''}" aria-label="List view" aria-pressed="${view==='list'}">${icon('list')}</button></div></div></div><div id="collection-results">${collectionResults()}</div>`;
+  const languages=new Map(state.collection.map(c=>[c.lang,languageLabel(c.lang)]));
+  const sets=new Map(state.collection.filter(c=>c.kind!=='sealed'&&c.setId)
+    .map(c=>[setKey(c),`${c.setName} · ${languageLabel(c.lang)}`]));
+  const expanded=kindFilter!=='all'||setFilter||valuationFilter||sort!=='recent';
+  return `${heading('My collection',`${num(totals(state).quantity)} cards and sealed items`,button('Refresh prices','refresh','refresh','subtle')+button('Add sealed','discover-sealed','box','subtle')+button('Add cards','discover','plus','primary'))}
+  <div class="toolbar collection-toolbar">
+    <div class="search-field">${icon('search')}<input id="collection-search" aria-label="Search your collection" placeholder="Name, set or card number…" value="${esc(collectionQuery)}"></div>
+    <div class="toolbar-group">
+      <select id="binder-filter" aria-label="Filter by binder"><option value="all">All binders</option>${filterOptions(state.binders.map(b=>[b.id,b.name]),binderFilter)}</select>
+      <select id="language-filter" aria-label="Filter by language"><option value="">All languages</option>${filterOptions(languages,languageFilter)}</select>
+      <div class="view-toggle" aria-label="Collection view"><button data-view="grid" class="${view==='grid'?'active':''}" aria-label="Grid view" aria-pressed="${view==='grid'}">${icon('home')}</button><button data-view="list" class="${view==='list'?'active':''}" aria-label="List view" aria-pressed="${view==='list'}">${icon('list')}</button></div>
+    </div>
+    <details class="collection-extra-filters" ${expanded?'open':''}><summary>More filters and sort</summary><div class="toolbar-group">
+      <select id="kind-filter" aria-label="Filter by item type"><option value="all">Cards &amp; sealed</option><option value="card" ${kindFilter==='card'?'selected':''}>Cards only</option><option value="sealed" ${kindFilter==='sealed'?'selected':''}>Sealed only</option></select>
+      <select id="set-filter" aria-label="Filter by set"><option value="">All sets</option>${filterOptions(sets,setFilter)}</select>
+      <select id="valuation-filter" aria-label="Filter by valuation"><option value="">All valuations</option><option value="missing" ${valuationFilter==='missing'?'selected':''}>Needs valuation</option><option value="personal" ${valuationFilter==='personal'?'selected':''}>Personal valuation</option></select>
+      <select id="sort" aria-label="Sort collection"><option value="recent">Recently added</option><option value="value" ${sort==='value'?'selected':''}>Highest value</option><option value="difference" ${sort==='difference'?'selected':''}>Largest gain</option><option value="name" ${sort==='name'?'selected':''}>Name A–Z</option></select>
+    </div></details>
+  </div><div id="collection-results">${collectionResults()}</div>`;
 }
+
+const signedEuro = value => value===null?'—':`${value>0?'+':''}${euro(value)}`;
+function collectionRows() {
+  const normalize = value => value.normalize('NFKC').toLowerCase();
+  const term=normalize(collectionQuery.trim());
+  const rows=state.collection.filter(c=>
+    (binderFilter==='all'||c.binderId===binderFilter) &&
+    (kindFilter==='all'||c.kind===kindFilter) &&
+    (!languageFilter||c.lang===languageFilter) &&
+    (!setFilter||(c.kind!=='sealed'&&setKey(c)===setFilter)) &&
+    (valuationFilter!=='missing'||effectivePrice(c)===null) &&
+    (valuationFilter!=='personal'||c.manualValuation) &&
+    (!term||normalize(`${c.name} ${c.setName} ${c.id} ${c.localId} ${c.productCode||''} ${c.edition||''}`).includes(term)));
+  const value=c=>(effectivePrice(c)??0)*c.quantity;
+  const delta=c=>effectivePrice(c)===null?-Infinity:value(c)-c.cost*c.quantity;
+  if(sort==='value')return rows.sort((a,b)=>value(b)-value(a));
+  if(sort==='difference')return rows.sort((a,b)=>delta(b)-delta(a));
+  if(sort==='name')return rows.sort((a,b)=>a.name.localeCompare(b.name));
+  return rows.sort((a,b)=>b.addedAt.localeCompare(a.addedAt));
+}
+
+function updateCollectionResults(reset=false) {
+  if(reset){collectionPage=1;selectedEntries.clear();}
+  const target=document.querySelector('#collection-results');
+  if(target)target.innerHTML=collectionResults();
+  updateSelection();
+}
+
+function updateSelection() {
+  const count=document.querySelector('#selected-count');
+  const move=document.querySelector('#move-selected');
+  const form=document.querySelector('#collection-move-form');
+  if(count)count.textContent=`${num(selectedEntries.size)} selected`;
+  if(move)move.disabled=!selectedEntries.size;
+  if(form)form.hidden=!selectedEntries.size;
+  const toggle=document.querySelector('[data-action="select-visible"]');
+  if(toggle)toggle.textContent=[...document.querySelectorAll('[data-select-entry]')].every(input=>input.checked)?'Deselect page':'Select page';
+}
+
 function collectionResults() {
-  const term=collectionQuery.toLowerCase();
-  const rows=state.collection.filter(c=>(binderFilter==='all'||c.binderId===binderFilter)&&(kindFilter==='all'||(c.kind||'card')===kindFilter)&&`${c.name} ${c.setName} ${c.localId} ${c.productCode||''} ${c.edition||''}`.toLowerCase().includes(term));
-  rows.sort(sort==='name'?(a,b)=>a.name.localeCompare(b.name):sort==='value'?(a,b)=>(effectivePrice(b)??-1)*b.quantity-(effectivePrice(a)??-1)*a.quantity:(a,b)=>new Date(b.addedAt)-new Date(a.addedAt));
-  if(!rows.length) return empty('cards',state.collection.length?'No items found':'Your collection begins with one item.',state.collection.length?'Try a different search, item type or binder.':'Find a favorite, add it to your vault, and make it yours.',state.collection.length?'Clear filters':'Find your first card',state.collection.length?'clear-filters':'discover');
-  return `<div class="result-note"><span>${num(rows.length)} collection entries</span><span>EUR · Personal valuations override market references</span></div>${view==='grid'?`<div class="card-grid collection-grid">${rows.map(c=>cardTile(c,'collection')).join('')}</div>`:`<div class="table-scroll"><table class="collection-table"><thead><tr><th>Item</th><th>Type / condition</th><th>Quantity</th><th>Unit cost</th><th>Unit valuation</th><th>Total value</th><th></th></tr></thead><tbody>${rows.map(c=>`<tr><td><div class="table-card">${art(c)}<button data-entry="${esc(c.uid)}">${esc(c.name)}<small>${esc(c.setName)}${c.localId?` · #${esc(c.localId)}`:''} · ${esc(c.lang==='und'?'Language unspecified':c.lang.toUpperCase())}</small></button></div></td><td>${esc(identityLabel(c))}</td><td>${c.quantity}</td><td>${euro(c.cost)}</td><td>${euro(effectivePrice(c))}<br>${priceBadge(c)}</td><td>${effectivePrice(c)===null?'—':euro(effectivePrice(c)*c.quantity)}</td><td><button class="icon-button" data-entry="${esc(c.uid)}" aria-label="Edit ${esc(c.name)}">${icon('chevron')}</button></td></tr>`).join('')}</tbody></table></div>`}`;
+  const rows=collectionRows();
+  if(!rows.length) return empty('cards',state.collection.length?'No items found':'Your collection is empty',state.collection.length?'Change or clear the active filters.':'Search for a card or sealed product to add your first item.',state.collection.length?'Clear filters':'Find your first card',state.collection.length?'clear-filters':'discover');
+  const pages=Math.ceil(rows.length/COLLECTION_PAGE_SIZE);
+  collectionPage=Math.min(collectionPage,pages);
+  const start=(collectionPage-1)*COLLECTION_PAGE_SIZE;
+  const display=rows.slice(start,start+COLLECTION_PAGE_SIZE);
+  const summary=totals({...state,collection:rows});
+  const binders=new Map(state.binders.map(b=>[b.id,b.name]));
+  const selectedPage=display.every(c=>selectedEntries.has(c.uid));
+  return `<section class="collection-summary" aria-label="Filtered collection totals"><dl>
+    <div><dt>Items</dt><dd>${num(summary.quantity)}</dd><small>${num(rows.length)} entries</small></div>
+    <div><dt>Estimated value</dt><dd>${summary.pricedQuantity?euro(summary.value):'—'}</dd><small>${num(summary.pricedQuantity)} of ${num(summary.quantity)} valued</small></div>
+    <div><dt>Purchase cost</dt><dd>${euro(summary.cost)}</dd></div>
+    <div><dt>Estimated gain / loss</dt><dd class="${summary.profit>0?'positive':summary.profit<0?'negative':''}">${signedEuro(summary.pricedQuantity?summary.profit:null)}</dd><small>Valued items only</small></div>
+  </dl></section>
+  <div class="collection-actions">
+    <button type="button" class="button subtle small-button" data-action="select-visible">${selectedPage?'Deselect page':'Select page'}</button>
+    <span id="selected-count" role="status">${num(selectedEntries.size)} selected</span>
+    <form id="collection-move-form" ${selectedEntries.size?'':'hidden'}><select name="binderId" aria-label="Destination binder" required><option value="">Choose a binder</option>${filterOptions(binders,'')}</select>
+    <button id="move-selected" class="button subtle small-button" type="submit" ${selectedEntries.size?'':'disabled'}>Move selected</button></form>
+    ${button('New binder','new-binder','folder','subtle small-button')}
+  </div>
+  ${view==='grid'? `<div class="card-grid collection-grid">${display.map(c=>cardTile(c,'collection')).join('')}</div>` :
+  `<div class="table-scroll"><table class="collection-table"><thead><tr><th scope="col">Select</th><th scope="col">Item</th><th scope="col">Printing / condition</th><th scope="col">Qty</th><th scope="col">Cost / item</th><th scope="col">Value / item</th><th scope="col">Total value</th><th scope="col">Gain / loss</th></tr></thead><tbody>
+  ${display.map(c=>{
+    const unit=effectivePrice(c);
+    const difference=unit===null?null:(unit-c.cost)*c.quantity;
+    return `<tr><td>${entryCheckbox(c)}</td><td><div class="table-card">${art(c)}<button data-entry="${esc(c.uid)}">${esc(c.name)}<small>${esc(c.setName)}${c.localId?` · #${esc(c.localId)}`:''} · ${esc(binders.get(c.binderId))}</small></button></div></td><td>${esc(identityLabel(c))}</td><td>${num(c.quantity)}</td><td>${euro(c.cost)}</td><td>${unit===null?'—':euro(unit)}<br>${priceBadge(c)}</td><td>${unit===null?'—':euro(unit*c.quantity)}</td><td class="${difference>0?'positive':difference<0?'negative':''}">${signedEuro(difference)}</td></tr>`;
+  }).join('')}</tbody></table></div>`}
+  ${pages>1?`<div class="pagination"><button class="button subtle small-button" data-action="collection-previous" ${collectionPage===1?'disabled':''}>Previous</button><span>Page ${collectionPage} of ${pages}</span><button class="button subtle small-button" data-action="collection-next" ${collectionPage===pages?'disabled':''}>Next</button></div>`:''}`;
 }
+
 function catalog() {
   const selected=CATALOGUE_LANGUAGES.find(item=>item.code===lang);
   const asian=marketLanguage(lang)!=='en';
@@ -554,7 +654,7 @@ document.addEventListener('click',async event=>{
     if(el.dataset.card){await openCard(el.dataset.card,el.dataset.lang);return;}
     if(el.dataset.sealed){await openSealed(el.dataset.sealed);return;}
     if(el.dataset.set){await browseSet(el.dataset.set,el.dataset.lang);return;}
-    if(el.dataset.binder){binderFilter=el.dataset.binder;collectionQuery='';navigate('collection');return;}
+    if(el.dataset.binder){binderFilter=el.dataset.binder;collectionQuery='';kindFilter='all';languageFilter='';setFilter='';valuationFilter='';collectionPage=1;selectedEntries.clear();navigate('collection');return;}
     if(el.dataset.view){view=el.dataset.view;render();return;}
     if(el.dataset.range){range=el.dataset.range;render();return;}
     if(el.dataset.historyDays){await showPriceHistory(Number(el.dataset.historyDays));return;}
@@ -576,7 +676,16 @@ document.addEventListener('click',async event=>{
       case 'new-binder':newBinder();break;
       case 'toggle-modal-mode':captureCardDraft();modalMode=modalMode==='wish'?'collect':'wish';renderCardModal();break;
       case 'remove-card':removeCard();break;
-      case 'clear-filters':binderFilter='all';kindFilter='all';collectionQuery='';render();break;
+      case 'clear-filters':binderFilter='all';kindFilter='all';collectionQuery='';languageFilter='';setFilter='';valuationFilter='';collectionPage=1;selectedEntries.clear();render();break;
+      case 'select-visible': {
+        const inputs=[...document.querySelectorAll('[data-select-entry]')];
+        const select=inputs.some(input=>!input.checked);
+        for(const input of inputs){input.checked=select;if(select)selectedEntries.add(input.dataset.selectEntry);else selectedEntries.delete(input.dataset.selectEntry);}
+        updateSelection();
+        break;
+      }
+      case 'collection-previous':if(collectionPage>1){collectionPage--;updateCollectionResults();}break;
+      case 'collection-next':collectionPage++;updateCollectionResults();break;
       case 'browse-catalogue-sets':await browseCatalogueSets();break;
       case 'clear-search':++searchTicket;query='';listingSets=false;setView=null;lastSetRequest=null;searchPage=1;searching=false;searchError='';render();break;
       case 'retry-search':if(listingSets)await browseCatalogueSets();else if(lastSetRequest)await browseSet(lastSetRequest.id,lastSetRequest.lang);else if(query)await runSearch();else{searchError='';render();}break;
@@ -603,6 +712,25 @@ document.addEventListener('submit',event=>{
   if(event.target.id==='card-form'){event.preventDefault();saveCard(event.target);}
   if(event.target.id==='sealed-form'){event.preventDefault();saveSealed(event.target);}
   if(event.target.id==='sealed-search-form'){event.preventDefault();const data=new FormData(event.target);sealedQuery=String(data.get('query')||'').trim();sealedType=String(data.get('type')||'');sealedPage=1;void runSealedSearch();}
+  if(event.target.id==='collection-move-form'){
+    event.preventDefault();
+    const binderId=new FormData(event.target).get('binderId');
+    const binder=state.binders.find(b=>b.id===binderId);
+    if(!binder||!selectedEntries.size)return;
+    const before=state;
+    let moved=0;
+    const collection=state.collection.map(entry=>{
+      if(!selectedEntries.has(entry.uid)||entry.binderId===binderId)return entry;
+      moved++;
+      return {...entry,binderId};
+    });
+    try {
+      if(!moved){toast('The selected items are already in this binder.');return;}
+      selectedEntries.clear();
+      commit({...state,collection});
+      toast(`Moved ${num(moved)} ${moved===1?'entry':'entries'} to ${binder.name}.`,()=>{commit(before);toast('Items moved back.');});
+    }catch(error){toast(error.message);}
+  }
   if(event.target.id==='binder-form'){
     event.preventDefault();const name=new FormData(event.target).get('name').trim();
     try{if(!name)throw new Error('Give your binder a name.');commit({...state,binders:[...state.binders,{id:crypto.randomUUID(),name}]});closeModal();toast('Your new binder is ready.');}
@@ -610,7 +738,7 @@ document.addEventListener('submit',event=>{
   }
 });
 document.addEventListener('input',event=>{
-  if(event.target.id==='collection-search'){collectionQuery=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
+  if(event.target.id==='collection-search'){collectionQuery=event.target.value;updateCollectionResults(true);}
   if(['card-cost','sealed-cost'].includes(event.target.id))event.target.dataset.edited='true';
 });
 document.addEventListener('change',event=>{
@@ -622,9 +750,17 @@ document.addEventListener('change',event=>{
     if(old){const host=document.createElement('div');host.innerHTML=sealedPricePanel(preview);old.replaceWith(host.querySelector('.market-estimate'));}
   }
   if(event.target.id==='card-variant'){captureCardDraft();++modalHistoryTicket;renderCardModal();}
-  if(event.target.id==='binder-filter'){binderFilter=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
-  if(event.target.id==='kind-filter'){kindFilter=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
-  if(event.target.id==='sort'){sort=event.target.value;document.querySelector('#collection-results').innerHTML=collectionResults();}
+  if(event.target.id==='binder-filter'){binderFilter=event.target.value;updateCollectionResults(true);}
+  if(event.target.id==='kind-filter'){kindFilter=event.target.value;updateCollectionResults(true);}
+  if(event.target.id==='language-filter'){languageFilter=event.target.value;updateCollectionResults(true);}
+  if(event.target.id==='set-filter'){setFilter=event.target.value;updateCollectionResults(true);}
+  if(event.target.id==='valuation-filter'){valuationFilter=event.target.value;updateCollectionResults(true);}
+  if(event.target.id==='sort'){sort=event.target.value;collectionPage=1;updateCollectionResults();}
+  if(event.target.dataset?.selectEntry){
+    const uid=event.target.dataset.selectEntry;
+    if(event.target.checked)selectedEntries.add(uid);else selectedEntries.delete(uid);
+    updateSelection();
+  }
   if(event.target.id==='catalog-lang'){
     lang=catalogueLanguage(event.target.value);event.target.value=lang;
     query=document.querySelector('#catalog-query').value.trim();
@@ -642,7 +778,7 @@ modal.addEventListener('cancel',closeModal);
 window.addEventListener('hashchange',()=>{page=pages[location.hash.slice(1)]?location.hash.slice(1):'dashboard';render();if(page==='sealed'&&!sealedResult&&!sealedLoading)void runSealedSearch();});
 window.addEventListener('storage',event=>{
   if(event.key!==STORAGE_KEY)return;
-  try{state=event.newValue?normalizeState(JSON.parse(event.newValue)):emptyState();closeModal();render();toast('Your vault was updated in another tab.');}
+  try{state=event.newValue?normalizeState(JSON.parse(event.newValue)):emptyState();selectedEntries.clear();closeModal();render();toast('Your vault was updated in another tab.');}
   catch{toast('Another tab saved unreadable data. Export your current vault before closing.');}
 });
 document.addEventListener('error',event=>{if(event.target instanceof HTMLImageElement){const img=event.target;img.hidden=true;img.parentElement?.classList.add('art-unavailable');}},true);

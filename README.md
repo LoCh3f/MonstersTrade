@@ -121,7 +121,8 @@ A failed deployment or post-deployment health check needs investigation before r
 - View price source, provider date, last acquisition/attempt, and missing, stale, failed, or unverified states. A generic market reference remains labelled as such.
 - Refresh collection and wishlist references, with automatic refresh when returning to the app as needed. The shared cache prevents the manual button from repeatedly fetching the same provider data.
 - View shared per-card reference history and local aggregate collection snapshots. Coverage shows how many holdings have prices, personal valuations, old references, or no usable quote.
-- Save wishlist targets, organize binders, and track set progress by distinct card IDs.
+- Filter holdings by type, language, set, binder or valuation status. Compare estimated value with purchase cost in the filtered collection and move selected entries between binders together.
+- Save wishlist targets and track set progress by language and distinct card IDs.
 - Export collection rows to CSV or the complete local state to JSON. CSV merges rows; JSON restore replaces local collection, wishlist, binders, and aggregate history after a preview. Imports and removals offer a temporary undo action until another change is saved.
 
 ## How prices are handled
