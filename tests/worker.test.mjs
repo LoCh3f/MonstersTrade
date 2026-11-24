@@ -71,6 +71,31 @@ test('re-reading old provider data does not fabricate a new daily observation', 
   assert.equal(history.points[0].fetchedAt, new Date(START).toISOString());
 });
 
+test('Asian catalogue prices, observations and scheduled refreshes are scoped to their printing language', async t => {
+  const calls = [];
+  const h = harness(t, { provider: async url => {
+    const language = new URL(url).pathname.split('/')[2];
+    calls.push(language);
+    return Response.json(rawCard(language === 'en' ? 'sv2a-025' : 'SV2a-025', { en: 3, ja: 12, 'zh-tw': 15 }[language]));
+  } });
+  const path = '/api/prices/sv2a-025';
+  for (const [query, language, amount] of [['', 'en', 3], ['?lang=ja', 'ja', 12], ['?lang=zh-tw', 'zh-tw', 15]]) {
+    const latest = await (await h.request(path + query)).json();
+    assert.equal(latest.catalogueLanguage, language);
+    assert.equal(latest.reference.amount, amount);
+    const history = await (await h.request(path + '/history' + query)).json();
+    assert.equal(history.catalogueLanguage, language);
+    assert.deepEqual(history.points.map(point => point.amount), [amount]);
+  }
+  assert.equal((await h.request('/api/prices/SV2a-025?lang=ja')).status, 200);
+  assert.equal((await h.request(path + '?lang=xx')).status, 400);
+  assert.equal((await h.request(path + '?lang=ja&lang=ko')).status, 400);
+  assert.deepEqual(calls, ['en', 'ja', 'zh-tw']);
+  h.setTime(START + DAY + 1);
+  assert.equal((await refreshScheduled(h.env, h.deps)).refreshed, 3);
+  assert.deepEqual(calls.slice(3).sort(), ['en', 'ja', 'zh-tw']);
+});
+
 test('provider failures keep the previous quote and respect Retry-After/cooldown', async t => {
   const h = harness(t);
   await h.request();

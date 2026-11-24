@@ -82,6 +82,19 @@ test('selected variants require a matching verified quote; unrelated reference i
   assert.throws(() => applyMarketUpdate(original, bundle({ cardId: 'base1-4' })), /different card/);
 });
 
+test('Asian holdings retain marketplace evidence and require their own portfolio valuation', () => {
+  const asian = entry({ lang: 'ja' });
+  assert.throws(() => applyMarketUpdate(asian, bundle()), /different catalogue language/);
+  const refreshed = applyMarketUpdate(asian, bundle({ catalogueLanguage: 'ja', reference: reference({ amount: 35 }) }));
+  assert.equal(refreshed.market.amount, 35);
+  assert.equal(effectivePrice(refreshed), null);
+  assert.equal(effectivePrice({ ...refreshed, manualValuation: valuation(30) }), 30);
+  const roundTrip = normalizeState({ ...emptyState(), collection: [refreshed] }).collection[0];
+  assert.equal(roundTrip.lang, 'ja');
+  assert.equal(roundTrip.uid, asian.uid);
+  assert.equal(roundTrip.market.amount, 35);
+});
+
 test('missing quote and failed request retain old evidence without inventing a fresh source date', () => {
   const original = entry();
   const tomorrow = '2026-11-24T12:00:00.000Z';
