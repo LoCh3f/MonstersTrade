@@ -14,6 +14,9 @@ const japaneseSetNames = new Map([
 const setQualifiers = {
   ja: [set151Qualifier, [/\s+Shiny\s+Treasure(?:\s+ex)?$/i, 'sv4a'], [/\s+Terastal\s+Festival(?:\s+ex)?$/i, 'sv8a']],
   ko: [set151Qualifier],
+  'zh-tw': [set151Qualifier],
+  th: [set151Qualifier],
+  id: [set151Qualifier],
 };
 const cardNameColumns = { ja: 2, ko: 3 };
 // Official card titles in English, Italian, Japanese, and Korean.
