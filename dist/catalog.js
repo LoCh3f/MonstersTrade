@@ -1,6 +1,6 @@
 /** TCGdex public catalogue. Market estimates are Cardmarket trends in EUR. */
 import { providerMarketComparison } from './pricing.js';
-import { catalogueAlias, pokemonNameForIds } from './pokemon-search.js';
+import { catalogueAlias, pokemonNameForIds, printedSearchName } from './pokemon-search.js';
 
 const API = 'https://api.tcgdex.net/v2';
 const TIMEOUT_MS = 12_000;
@@ -161,12 +161,12 @@ export async function searchCards(query, lang = 'en', page = 1) {
     if (!set) return [];
     filters['set.id'] = `eq:${set.id}`;
   }
-  if (!pokemon.id) return cardList({ ...filters, name: pokemon.nativeName }, lang, pageNumber);
+  const printedName = printedSearchName(pokemon, lang);
+  if (!pokemon.id) return cardList({ ...filters, name: printedName }, lang, pageNumber);
   const suffix = pokemon.suffix.toUpperCase();
-  if (lang === 'ja' && suffix === 'EX' && pokemon.nativeName) {
+  if ((lang === 'ja' || lang === 'ko') && suffix === 'EX' && pokemon.nativeName) {
     // TCGdex groups ex and EX under the same suffix. The printed title distinguishes those eras.
-    const printedSuffix = pokemon.suffix === 'EX' ? 'EX' : 'ex';
-    return cardList({ ...filters, name: `eq:${pokemon.nativeName}${printedSuffix}` }, lang, pageNumber, pokemon.name);
+    return cardList({ ...filters, name: `eq:${printedName}` }, lang, pageNumber, pokemon.name);
   }
   if (suffix) filters.suffix = `eq:${suffix}`;
   const dexFilters = { ...filters, dexId: `eq:${pokemon.id}` };
@@ -175,7 +175,7 @@ export async function searchCards(query, lang = 'en', page = 1) {
   // Base the fallback on page one so all pages use the same query strategy.
   const first = await cardList(dexFilters, lang, 1, pokemon.name);
   if (first.length) return pageNumber === 1 ? first : cardList(dexFilters, lang, pageNumber, pokemon.name);
-  return cardList({ ...filters, name: pokemon.nativeName }, lang, pageNumber, pokemon.name);
+  return cardList({ ...filters, name: printedName }, lang, pageNumber, pokemon.name);
 }
 
 export async function getCard(id, lang = 'en', force = false) {

@@ -132,3 +132,25 @@ test('set browsing shows identifying codes when a Japanese title has no translat
   assert.match(node('#app').innerHTML, /class="card-name">Card #060</);
   assert.match(node('#app').innerHTML, /lang="ja">ナイトストレッチャー/);
 });
+
+test('an Italian printing-language qualifier selects Korean and links to the official fallback', async t => {
+  const { app, handlers, node, stored, requests } = await application(t, path => {
+    if (path.endsWith('/ko/sets')) return [{ id: 'SV2a', name: '포켓몬 카드 151' }];
+    if (path.includes('/ko/cards?')) return [];
+  });
+  node('#catalog-query').value = 'Pikachu 151 in coreano';
+  handlers.get('submit')({ target: { id: 'catalog-form' }, preventDefault() {} });
+  await new Promise(setImmediate);
+
+  assert.deepEqual(app.testState(), { lang: 'ko', query: 'Pikachu 151' });
+  assert.equal(stored.get('pocketvault.lang'), 'ko');
+  const searches = requests.filter(url => url.includes('/ko/cards?')).map(url => new URL(url).searchParams);
+  assert.deepEqual(searches.map(params => params.get('set.id')), ['eq:SV2a', 'eq:SV2a']);
+  assert.equal(searches.at(-1).get('name'), '피카츄');
+
+  const results = node('#catalog-results').innerHTML;
+  assert.match(results, /Search the official Pokémon Korea catalogue/);
+  const link = new URL(results.match(/href="([^"]+)"/)[1]);
+  assert.equal(link.origin, 'https://pokemoncard.co.kr');
+  assert.equal(link.searchParams.get('s'), '피카츄');
+});

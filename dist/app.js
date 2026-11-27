@@ -1,7 +1,7 @@
 import { emptyState, normalizeState, addCard, updateEntry, removeEntry, totals, recordSnapshot, exportCSV, CONDITIONS, SEALED_TYPES, effectivePrice, applyMarketUpdate, applySealedMarketUpdate } from './model.js';
 import { searchCards, getCard, getSet, getSets, cardImage } from './catalog.js';
 import { CATALOGUE_LANGUAGES, catalogueLanguage, languageLabel, marketCardKey, marketLanguage } from './languages.js';
-import { catalogueCardTitle, catalogueSetName } from './pokemon-search.js';
+import { catalogueAlias, catalogueCardTitle, catalogueQuery, catalogueSetName, printedSearchName } from './pokemon-search.js';
 import { getPrices, getPriceHistory, priceServiceHealth } from './price-client.js';
 import { normalizeQuote, quoteStatus } from './pricing.js';
 import { priceBadge, identityLabel, coveragePanel, marketPanel, variantFields, personalFields, historyPanel } from './price-view.js';
@@ -323,9 +323,9 @@ function collectionResults() {
 function catalog() {
   const selected=CATALOGUE_LANGUAGES.find(item=>item.code===lang);
   const asian=marketLanguage(lang)!=='en';
-  const examples=lang==='ja'?['Pikachu','Charizard ex','Charizard ex 151']:asian?[selected?.example||'Pikachu']:['Pikachu','Charizard','Eevee','Mew','Gengar','Dragonite'];
+  const examples=lang==='ja'?['Pikachu','Charizard ex 151','Caramella Rara']:lang==='ko'?['Manoferrea-ex','Contracchiappa-Pokémon']:asian?[selected?.example||'Pikachu']:['Pikachu','Charizard','Eevee','Mew','Gengar','Dragonite'];
   const setName=setView?catalogueSetName(setView.name,setView.id,lang):'';
-  const subtitle=asian?`Search ${languageLabel(lang)} printings using an English or Italian Pokémon name, or enter a card ID.`:'Search by name or card ID, or browse sets by printing language.';
+  const subtitle=asian?`Search ${languageLabel(lang)} printings by name in English or Italian, or enter a card ID.`:'Search by name or card ID. Choose a printing language or try “Pikachu giapponese”.';
   return `${heading(setView?esc(setName):'Discover cards',setView?`${esc(languageLabel(lang))} · ${esc(setView.id)}${setName!==setView.name?` · ${esc(setView.name)}`:''}`:subtitle)}
   <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" aria-label="Search cards by name or catalogue ID" placeholder="${esc(selected?.example||'Pikachu')} or a card ID…" value="${esc(query)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group"><label class="printing-language" for="catalog-lang"><span>Printing language</span><select id="catalog-lang">${CATALOGUE_LANGUAGES.map(({code,label})=>`<option value="${code}" ${lang===code?'selected':''}>${label}</option>`).join('')}${!selected?`<option value="${esc(lang)}" selected>${esc(languageLabel(lang))}</option>`:''}</select></label><button class="button primary" type="submit">${icon('search')}Search</button></div></form>
   <div class="chips"><button class="chip ${listingSets?'active':''}" data-action="browse-catalogue-sets">Browse sets</button>${examples.map(name=>`<button class="chip ${query===name?'active':''}" data-search="${esc(name)}">${esc(name)}</button>`).join('')}${setView||listingSets?'<button class="chip" data-action="clear-search">Clear</button>':''}</div><div id="catalog-results">${catalogResults()}</div>`;
@@ -341,7 +341,16 @@ function catalogResults() {
   const usingFeatured=!query&&!setView&&marketLanguage(lang)==='en';
   if(!usingFeatured&&!query&&!setView)return empty('search',`Find ${esc(languageLabel(lang))} printings`,lang==='ja'?'Try “Pikachu”, “Charizard ex 151”, or a card ID like “SV2a-201”.':'Enter a Pokémon name such as Pikachu or the card’s catalogue ID.','','');
   const rows=usingFeatured?featured:searchResults;
-  if(!rows.length) return empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets')+(searchPage>1?cataloguePagination(true):'');
+  if(!rows.length){
+    const pagination=searchPage>1?cataloguePagination(true):'';
+    if(lang==='ko'&&searchPage===1){
+      const alias=catalogueAlias(query,lang);
+      const url=new URL('https://pokemoncard.co.kr/cards');
+      if(alias?.nativeName)url.searchParams.set('s',printedSearchName(alias,lang));
+      return empty('search','No cards found',`TCGdex covers only some Korean printings. <a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">Search the official Pokémon Korea catalogue</a>.`,'','');
+    }
+    return empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets')+pagination;
+  }
   const display=usingFeatured?rows:setView?rows.slice((searchPage-1)*24,searchPage*24):rows;
   return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,lang))}`:`Results for “${esc(query)}” · ${esc(lang.toUpperCase())}`}</span><span>${usingFeatured?'Saved reference snapshots':'Open a card for details and pricing'}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${!usingFeatured?cataloguePagination(setView?searchPage*24>=rows.length:rows.length<24):'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>'}`;
 }
@@ -371,6 +380,10 @@ async function runSearch() {
   finally{if(ticket===searchTicket){searching=false;updateCatalog();}}
 }
 function updateCatalog() {const container=document.querySelector('#catalog-results');if(container)container.innerHTML=catalogResults();}
+function selectCatalogueLanguage(value) {
+  lang=catalogueLanguage(value);
+  try{localStorage.setItem('pocketvault.lang',lang);}catch{}
+}
 async function browseSet(id,language) {
   ++searchTicket;listingSets=false;lang=catalogueSetLanguage(language||lang);lastSetRequest={id,lang};query='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
   const ticket=searchTicket;
@@ -724,7 +737,15 @@ document.addEventListener('click',async event=>{
   }catch(error){toast(error.message||'Something went wrong. Please try again.');}
 });
 document.addEventListener('submit',event=>{
-  if(event.target.id==='catalog-form'){event.preventDefault();query=document.querySelector('#catalog-query').value.trim();searchPage=1;runSearch();}
+  if(event.target.id==='catalog-form'){
+    event.preventDefault();
+    const input=document.querySelector('#catalog-query');
+    const search=catalogueQuery(input.value.trim(),lang);
+    query=search.term;searchPage=1;
+    if(search.lang!==lang){selectCatalogueLanguage(search.lang);render();}
+    else input.value=query;
+    void runSearch();
+  }
   if(event.target.id==='card-form'){event.preventDefault();saveCard(event.target);}
   if(event.target.id==='sealed-form'){event.preventDefault();saveSealed(event.target);}
   if(event.target.id==='sealed-search-form'){event.preventDefault();const data=new FormData(event.target);sealedQuery=String(data.get('query')||'').trim();sealedType=String(data.get('type')||'');sealedPage=1;void runSealedSearch();}
@@ -778,9 +799,8 @@ document.addEventListener('change',event=>{
     updateSelection();
   }
   if(event.target.id==='catalog-lang'){
-    lang=catalogueLanguage(event.target.value);event.target.value=lang;
+    selectCatalogueLanguage(event.target.value);event.target.value=lang;
     query=document.querySelector('#catalog-query').value.trim();
-    try{localStorage.setItem('pocketvault.lang',lang);}catch{}
     searchPage=1;
     if(!query&&listingSets)void browseCatalogueSets();
     else {render();void runSearch();}

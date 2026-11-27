@@ -223,6 +223,40 @@ test('verified Italian Trainer names search Japanese printings without changing 
   assert.equal(urls[0].searchParams.get('dexId'), null);
 });
 
+test('Italian hyphenated Pokémon names use the printed ex suffix in Japanese and Korean', async t => {
+  const { searchCards } = await freshCatalog();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const request = new URL(url);
+    requests.push(request);
+    const name = request.pathname === '/v2/ja/cards' ? 'テツノカイナex' : '무쇠손 ex';
+    return response([{ id: 'SV4M-027', name, localId: '027' }]);
+  });
+  assert.equal((await searchCards('Manoferrea-ex', 'ja'))[0].lang, 'ja');
+  assert.equal((await searchCards('Manoferrea‑ex', 'ko'))[0].lang, 'ko');
+  assert.deepEqual(requests.map(url => [url.pathname, url.searchParams.get('name')]), [
+    ['/v2/ja/cards', 'eq:テツノカイナex'],
+    ['/v2/ko/cards', 'eq:무쇠손 ex'],
+  ]);
+});
+
+test('Italian Trainer and Tag Team titles search the selected printed names', async t => {
+  const { searchCards } = await freshCatalog();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const request = new URL(url);
+    const name = request.searchParams.get('name');
+    requests.push([request.pathname, name]);
+    return response([{ id: 'test-001', name, localId: '001' }]);
+  });
+  assert.equal(latinCardName((await searchCards('Contracchiappa-Pokémon', 'ko'))[0]), 'Counter Catcher');
+  assert.equal(latinCardName((await searchCards('Mewtwo e Mew-GX', 'ja'))[0]), 'Mewtwo & Mew GX');
+  assert.deepEqual(requests, [
+    ['/v2/ko/cards', '카운터 캐처'],
+    ['/v2/ja/cards', 'ミュウツー&ミュウGX'],
+  ]);
+});
+
 test('network and provider failures have actionable messages and can be retried', async t => {
   const { getCard } = await freshCatalog();
   let status = 404;
