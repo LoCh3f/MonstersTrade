@@ -8,6 +8,7 @@ import { priceBadge, identityLabel, coveragePanel, marketPanel, variantFields, p
 import { searchSealed, getSealedProduct, getSealedHistory } from './sealed-client.js';
 import { sealedFields, sealedPricePanel, sealedValuationHistory, sealedPublicHistory, sealedIdentity, sealedAttribution } from './sealed-view.js';
 import { productImage, productPhotoSource, safePhotoURL } from './photos.js';
+import { isInstalled, promptInstallation, setupInstallation } from './install.js';
 
 const icons = {
   home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -165,6 +166,7 @@ function render() {
         <div class="top-actions">
           <button class="global-search" data-action="focus-search" aria-label="Search the card catalogue">${icon('search')}<span>Search any card…</span><kbd>/</kbd></button>
           <span class="local-status">${icon(storageWarning?'info':'shield')}${storageWarning?'Backup recommended':'Saved on this device'}</span>
+          <button type="button" class="button subtle small-button install-app" data-action="install-app" aria-label="Install Monstertrade" ${isInstalled()?'hidden':''}>${icon('download')}Install</button>
         </div>
       </header>
       <main id="main" class="main" tabindex="-1">
@@ -782,6 +784,15 @@ document.addEventListener('click',async event=>{
         modalShell('More',`<nav class="more-pages" aria-label="More sections">${morePages.map(id=>pageButton(id)).join('')}</nav>`,true);
         modal.classList.add('navigation-sheet');
         break;
+      case 'install-app':
+        if(!await promptInstallation()&&!isInstalled()){
+          modalShell('Install Monstertrade',`<div class="install-instructions">
+            <p><strong>iPhone or iPad</strong> In Safari, choose Share, then Add to Home Screen. Enable Open as Web App if shown.</p>
+            <p><strong>Android or desktop</strong> Look for Install app in Chrome or Edge. On macOS Safari, choose File, then Add to Dock.</p>
+            <p>Launch Monstertrade from its new icon to open it in its own window.</p>
+          </div>`,true);
+        }
+        break;
       case 'close-modal':closeModal();break;
       case 'new-binder':newBinder();break;
       case 'toggle-modal-mode':captureCardDraft();modalMode=modalMode==='wish'?'collect':'wish';renderCardModal();break;
@@ -901,6 +912,10 @@ window.addEventListener('storage',event=>{
 });
 document.addEventListener('error',event=>{if(event.target instanceof HTMLImageElement){const img=event.target;img.hidden=true;img.parentElement?.classList.add('art-unavailable');}},true);
 
+setupInstallation(()=>{
+  const button=document.querySelector('[data-action="install-app"]');
+  if(button)button.hidden=true;
+});
 render();
 if(page==='sealed')void runSealedSearch();
 try {const response=await fetch('./featured.json');if(response.ok)featured=await response.json();if(page==='dashboard')render();else if(page==='catalog')updateCatalog();}catch{}

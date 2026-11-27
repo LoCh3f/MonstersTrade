@@ -151,6 +151,9 @@ dialog:not(.modal-small){width:min(860px,calc(100vw - 32px))}.modal-columns{grid
   color: var(--accent);
 }
 .more-pages svg { width: 21px; height: 21px; flex: none; color: var(--accent); }
+.install-app[hidden] { display: none; }
+.install-instructions { display: grid; gap: 14px; color: var(--muted); line-height: 1.55; }
+.install-instructions strong { display: block; color: var(--text); margin-bottom: 3px; }
 
 @media (max-width: 767px) {
   :root { --bottom-nav-height: 62px; }
@@ -167,6 +170,7 @@ dialog:not(.modal-small){width:min(860px,calc(100vw - 32px))}.modal-columns{grid
     background: var(--bg);
   }
   .brand-wordmark { font-size: 19px; }
+  .install-app { min-height: 44px; padding: 8px 11px; }
   .main {
     padding: 22px max(16px, env(safe-area-inset-right)) calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 22px) max(16px, env(safe-area-inset-left));
     min-height: calc(100dvh - 57px - env(safe-area-inset-top));

@@ -18,6 +18,7 @@ test('static responses deny framing, inline scripts and unused browser capabilit
   }
   assert.deepEqual(policy.get('script-src'), ["'self'"]);
   assert.deepEqual(policy.get('worker-src'), ["'self'"]);
+  assert.deepEqual(policy.get('manifest-src'), ["'self'"]);
   assert.equal(headers['x-frame-options'], 'DENY');
   assert.equal(headers['x-content-type-options'], 'nosniff');
   assert.equal(headers['referrer-policy'], 'no-referrer');
