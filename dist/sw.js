@@ -1,11 +1,11 @@
 const cachePrefix = 'monstertrade-static-';
-const cacheName = `${cachePrefix}v1`;
+const cacheName = `${cachePrefix}v2`;
 const scope = self.registration.scope;
 const launchURL = new URL(scope);
 const indexURL = new URL('index.html', scope);
 const assets = new Set([
   '', 'manifest.webmanifest', 'styles.css', 'featured.json', 'POKEAPI-LICENSE.txt',
-  'app.js', 'catalog.js', 'import-worker.js', 'install.js', 'languages.js', 'model.js',
+  'app.js', 'card-offers.js', 'catalog.js', 'import-worker.js', 'install.js', 'languages.js', 'model.js',
   'photos.js', 'pokemon-names.js', 'pokemon-search.js', 'price-client.js', 'price-view.js',
   'pricing.js', 'sealed-client.js', 'sealed-view.js',
   'assets/monstertrade-logo.jpg', 'assets/icon-192.png', 'assets/icon-512.png',

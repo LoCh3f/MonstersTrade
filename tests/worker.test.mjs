@@ -14,6 +14,7 @@ function harness(t, options = {}) {
   sqlite.exec(readFileSync(new URL('../migrations/0001_public_prices.sql', import.meta.url), 'utf8'));
   sqlite.exec(readFileSync(new URL('../migrations/0002_active_price_catalogue.sql', import.meta.url), 'utf8'));
   sqlite.exec(readFileSync(new URL('../migrations/0004_price_admission.sql', import.meta.url), 'utf8'));
+  sqlite.exec(readFileSync(new URL('../migrations/0006_card_offers.sql', import.meta.url), 'utf8'));
   t.after(() => sqlite.close());
   const db = {
     prepare(sql) {
@@ -40,6 +41,42 @@ function harness(t, options = {}) {
   const request = (path = '/api/prices/sv03.5-001', init) => handleRequest(new Request('https://example.test' + path, init), env, {}, deps);
   return { sqlite, env, deps, request, setTime: next => { time = next; }, setProvider: fn => { provider = fn; }, calls: () => calls };
 }
+
+test('CardTrader uses reviewed blueprints, exact language and condition, and a shared daily cache', async t => {
+  const path = '/api/card-offers/30th-148?lang=it';
+  const base = { blueprint_id: 406809, quantity: 1, graded: false, bundle_size: 1 };
+  const offer = (cents, properties = {}, fields = {}) => ({ ...base, price: { cents, currency: 'EUR' },
+    properties_hash: { pokemon_language: 'it', condition: 'Near Mint', ...properties }, ...fields });
+  const h = harness(t, { env: { CARDTRADER_MARKET_TOKEN: 'fixture' }, provider: async (url, options) => {
+    assert.equal(url.origin, 'https://api.cardtrader.com');
+    assert.equal(url.pathname, '/api/v2/marketplace/products');
+    assert.equal(url.searchParams.get('blueprint_id'), '406809');
+    assert.equal(options.headers.Authorization, 'Bearer fixture');
+    assert.equal(options.redirect, 'error');
+    if (url.searchParams.get('language') === 'en') return Response.json({});
+    return Response.json({406809: [offer(1830), offer(1725), offer(1600, {condition: 'Excellent'}),
+      offer(1, {pokemon_language: 'en'}), offer(2, {}, {graded: true}), offer(3, {}, {quantity: 0}),
+      offer(4, {}, {blueprint_id: 406814}), offer(5, {}, {price: {cents: 5, currency: 'USD'}}),
+      offer(6, {signed: true}), offer(7, {}, {bundle_size: 2}), offer(8, {condition: 'Mint'})]});
+  }});
+  const first = await h.request(path);
+  assert.equal(first.status, 200);
+  const quoted = await first.json();
+  assert.deepEqual(quoted, {blueprintId: 406809, language: 'it', currency: 'EUR', observedAt: new Date(START).toISOString(), prices: {'Near Mint': 1725, Excellent: 1600}});
+  assert.deepEqual(await (await h.request(path)).json(), quoted);
+  assert.equal(h.calls(), 1);
+  assert.deepEqual((await (await h.request('/api/card-offers/30th-148?lang=en')).json()).prices, {});
+  assert.equal((await h.request('/api/card-offers/30th-148?lang=ja')).status, 404);
+  assert.equal(h.calls(), 2);
+  h.setTime(START + DAY + 1);
+  h.setProvider(async () => new Response(null, { status: 503 }));
+  assert.deepEqual(await (await h.request(path)).json(), quoted);
+  assert.deepEqual(await (await h.request(path)).json(), quoted);
+  assert.equal(h.calls(), 3);
+  delete h.env.CARDTRADER_MARKET_TOKEN;
+  assert.equal((await h.request(path)).status, 204);
+  assert.equal(h.calls(), 3);
+});
 
 test('canonical requests populate latest/history once and forced refresh respects the 24h cache', async t => {
   const h = harness(t);

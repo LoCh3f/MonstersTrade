@@ -1,5 +1,6 @@
 import { normalizeMarketComparison, normalizeQuote } from './pricing.js';
 import { marketCardKey, marketLanguage } from './languages.js';
+import { cardOfferKey, normalizeCardOffers } from './card-offers.js';
 
 // This cache contains public quotations only. Personal collection fields never
 // cross this module's network boundary.
@@ -125,7 +126,7 @@ function retryDelay(response) {
   return Number.isFinite(delay) ? Math.max(0, delay) : 600;
 }
 
-async function requestJSON(path) {
+async function requestJSON(path, { allowEmpty = false } = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -134,6 +135,7 @@ async function requestJSON(path) {
         method: 'GET', credentials: 'omit', mode: 'same-origin', redirect: 'error',
         cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal,
       });
+      if (allowEmpty && response.status === 204) return null;
       if (response.ok) return await response.json();
       const retryable = response.status === 429 || response.status === 503;
       const delay = retryable ? retryDelay(response) : 0;
@@ -191,7 +193,7 @@ function checkedBundle(value, checkedAt) {
 }
 
 /** Fetches only public prices for an identifier; never accepts collection rows. */
-export async function getPrices(cardId, { force = false, lang = 'en' } = {}) {
+async function getMarketPrices(cardId, { force = false, lang = 'en' } = {}) {
   cardId = id(cardId);
   const language = marketLanguage(lang);
   const key = marketCardKey(cardId, language);
@@ -231,6 +233,24 @@ export async function getPrices(cardId, { force = false, lang = 'en' } = {}) {
   pending.set(key, task);
   try { return forCard(structuredClone(await task)); }
   finally { pending.delete(key); }
+}
+
+export async function getPrices(cardId, options = {}) {
+  const lang = options.lang ?? 'en';
+  if (!cardOfferKey(cardId, lang)) return getMarketPrices(cardId, options);
+  const path = `/api/card-offers/${encodeURIComponent(id(cardId))}?${new URLSearchParams({ lang })}`;
+  if (!pending.has(path)) {
+    pending.set(path, requestJSON(path, { allowEmpty: true })
+      .then(value => normalizeCardOffers(value, cardId, lang))
+      .finally(() => pending.delete(path)));
+  }
+  const [market, offers] = await Promise.allSettled([
+    getMarketPrices(cardId, options),
+    pending.get(path),
+  ]);
+  if (market.status === 'rejected' && !offers.value) throw market.reason;
+  const bundle = market.value ?? { cardId, catalogueLanguage: marketLanguage(lang), lastError: market.reason.message };
+  return offers.value ? { ...bundle, cardOffers: structuredClone(offers.value) } : bundle;
 }
 
 /** Server history contains public observations, not personal portfolio values. */
