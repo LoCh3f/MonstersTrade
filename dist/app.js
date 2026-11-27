@@ -8,6 +8,7 @@ import { priceBadge, identityLabel, coveragePanel, marketPanel, variantFields, p
 import { searchSealed, getSealedProduct, getSealedHistory } from './sealed-client.js';
 import { sealedFields, sealedPricePanel, sealedValuationHistory, sealedPublicHistory, sealedIdentity, sealedAttribution } from './sealed-view.js';
 import { productImage, productPhotoSource, safePhotoURL } from './photos.js';
+import { isInstalled, promptInstallation, setupInstallation } from './install.js';
 
 const icons = {
   home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -140,11 +141,44 @@ function empty(symbol,title,description,cta = 'Discover cards',action = 'discove
 }
 function skeletons() { return `<div class="card-grid collection-grid">${Array.from({length:8},()=>'<div class="skeleton"></div>').join('')}</div>`; }
 
+const pageIcons = {dashboard:'home',collection:'cards',wishlist:'heart',binders:'folder',sets:'sets',catalog:'search',sealed:'box',settings:'download'};
+const morePages = ['binders','sets','sealed','settings'];
+
+function pageButton(id, label=pages[id], count) {
+  const active=page===id;
+  return `<button type="button" data-page="${id}"${active?' class="active" aria-current="page"':''}>${icon(pageIcons[id])}<span>${label}</span>${count===undefined?'':`<span class="count">${num(count)}</span>`}</button>`;
+}
+
 function render() {
   const focusedInput = page==='catalog' && document.activeElement?.id==='catalog-query' ? document.activeElement : null;
-  const count = totals(state).quantity;
-  const nav = (id, symbol, countText) => `<button data-page="${id}" class="${page===id?'active':''}" ${page===id?'aria-current="page"':''}>${icon(symbol)}${pages[id]}${countText!==undefined?`<span class="count">${num(countText)}</span>`:''}</button>`;
-  app.innerHTML = `<aside class="sidebar"><a class="brand" href="#dashboard" data-page="dashboard" aria-label="Monstertrade overview"><img src="./assets/monstertrade-logo.jpg" width="1280" height="853" alt="Monstertrade — Collect. Trade. Level up."></a><div class="workspace"><span class="workspace-icon">${icon('box')}</span><div>Personal workspace<small>Pokémon TCG</small></div></div><div class="nav-label">YOUR WORKSPACE</div><nav class="nav" aria-label="Main navigation">${nav('dashboard','home')}${nav('collection','cards',count)}${nav('wishlist','heart',state.wishlist.length)}${nav('binders','folder')}${nav('sets','sets')}<div class="nav-divider"></div>${nav('catalog','search')}${nav('sealed','box')}${nav('settings','download')}</nav><div class="sidebar-bottom"><div class="free-card"><div class="free-title">${icon('spark')}Big collection. Zero limits.</div><p>Cards, packs, boxes. All together.<br>Always free, always yours.</p></div><div class="profile"><div class="avatar">C</div><div><strong>My personal vault</strong><span>No account needed</span></div></div></div></aside><div class="sidebar-scrim" data-action="close-menu"></div><div class="app-shell"><header class="topbar"><div class="breadcrumb"><button class="mobile-menu" aria-label="Open navigation" data-action="menu">${icon('menu')}</button><a class="brand-wordmark" href="#dashboard" data-page="dashboard" aria-label="Monstertrade overview">Monster<span>trade</span></a>${icon('chevron')}<strong>${pages[page]}</strong></div><div class="top-actions"><button class="global-search" data-action="focus-search" aria-label="Search the card catalogue">${icon('search')}<span>Search any card…</span><kbd>/</kbd></button><span class="local-status">${icon(storageWarning?'info':'shield')}${storageWarning?'Backup recommended':'Saved on this device'}</span><div class="avatar" aria-label="Personal vault">C</div></div></header><main id="main" class="main" tabindex="-1">${storageWarning?`<div class="notice warning">${esc(storageWarning)} <button class="text-button" data-page="settings">Manage backups</button></div>`:''}${renderPage()}<footer class="footer"><span>Monstertrade · Collect. Trade. Level up.</span><span>Card data &amp; market references by <a href="https://tcgdex.dev" target="_blank" rel="noopener noreferrer">TCGdex</a> · Independent fan project</span><div>${sealedAttribution()}<p class="photo-source">Pokémon species names: <a href="./POKEAPI-LICENSE.txt">PokéAPI</a>. Card images: TCGdex. Sealed catalogue images: TCGplayer. Images are reference illustrations; check language and edition.</p></div></footer></main></div>`;
+  const counts = {collection:totals(state).quantity,wishlist:state.wishlist.length};
+  app.innerHTML = `
+    <aside class="sidebar">
+      <a class="brand" href="#dashboard" data-page="dashboard" aria-label="Monstertrade overview"><img src="./assets/monstertrade-logo.jpg" width="1280" height="853" alt="Monstertrade"></a>
+      <nav class="nav" aria-label="Main navigation">${Object.keys(pages).map(id=>pageButton(id,pages[id],counts[id])).join('')}</nav>
+    </aside>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="breadcrumb">
+          <a class="brand-wordmark" href="#dashboard" data-page="dashboard" aria-label="Monstertrade overview">Monster<span>trade</span></a>
+          ${icon('chevron')}<strong>${pages[page]}</strong>
+        </div>
+        <div class="top-actions">
+          <button class="global-search" data-action="focus-search" aria-label="Search the card catalogue">${icon('search')}<span>Search any card…</span><kbd>/</kbd></button>
+          <span class="local-status">${icon(storageWarning?'info':'shield')}${storageWarning?'Backup recommended':'Saved on this device'}</span>
+          <button type="button" class="button subtle small-button install-app" data-action="install-app" aria-label="Install Monstertrade" ${isInstalled()?'hidden':''}>${icon('download')}Install</button>
+        </div>
+      </header>
+      <main id="main" class="main" tabindex="-1">
+        ${storageWarning?`<div class="notice warning">${esc(storageWarning)} <button class="text-button" data-page="settings">Manage backups</button></div>`:''}
+        ${renderPage()}
+        <footer class="footer"><span>Monstertrade</span><span>Card data &amp; market references by <a href="https://tcgdex.dev" target="_blank" rel="noopener noreferrer">TCGdex</a> · Independent fan project</span><div>${sealedAttribution()}<p class="photo-source">Pokémon species names: <a href="./POKEAPI-LICENSE.txt">PokéAPI</a>. Card images: TCGdex. Sealed catalogue images: TCGplayer. Images are reference illustrations; check language and edition.</p></div></footer>
+      </main>
+    </div>
+    <nav class="mobile-nav" aria-label="Mobile navigation">
+      ${pageButton('dashboard','Home')}${pageButton('collection','Collection')}${pageButton('catalog','Search')}${pageButton('wishlist','Wishlist')}
+      <button type="button" data-action="more-navigation" aria-haspopup="dialog" aria-controls="modal"${morePages.includes(page)?' class="active"':''}>${icon('menu')}<span>More</span></button>
+    </nav>`;
   if(focusedInput){
     const input=document.querySelector('#catalog-query');
     input.focus({preventScroll:true});
@@ -170,8 +204,8 @@ function dashboard() {
     ['Estimated difference',signedEuro(t.pricedQuantity?t.profit:null),'trend',t.quantity?'Value minus cost · valued items only':'Your collection starts here'],
   ];
   const valuable=[...state.collection].filter(c=>effectivePrice(c)!==null).sort((a,b)=>effectivePrice(b)*b.quantity-effectivePrice(a)*a.quantity).slice(0,3);
-  return `${heading('A home for every card.', 'Your collection, a little more connected.',button('Import','import','upload','subtle')+button('Add sealed','discover-sealed','box','subtle')+button('Add cards','discover','plus','primary'))}
-  ${!state.collection.length?`<section class="hero"><div class="hero-content"><div class="eyebrow">${icon('spark')} COLLECT. TRADE. LEVEL UP.</div><h2>Every card. Every box.<br>One collection.</h2><p>Track cards and sealed products, follow prices, and find your next favorite.</p><div class="hero-actions">${button('Find your first card','discover','plus','primary')}<span class="hero-note">No subscriptions. Just collecting.</span></div></div><div class="hero-art" aria-hidden="true">${[featured[2],featured[0],featured[1]].filter(Boolean).map(c=>`<img src="${esc(imageURL(c))}" alt="">`).join('')}<span class="hero-spark">✧</span></div></section>`:''}
+  return `${heading('Overview', 'Cards, sealed products, and collection value.',button('Import','import','upload','subtle')+button('Add sealed','discover-sealed','box','subtle')+(t.quantity?button('Add cards','discover','plus','primary'):''))}
+  ${!state.collection.length?`<section class="hero"><div class="hero-content"><h2>Start your collection</h2><p>Find a card and add it to your vault.</p><div class="hero-actions">${button('Find cards','discover','search','primary')}</div></div><div class="hero-art" aria-hidden="true">${[featured[2],featured[0],featured[1]].filter(Boolean).map(c=>`<img src="${esc(imageURL(c))}" alt="">`).join('')}<span class="hero-spark">✧</span></div></section>`:''}
   <section class="stats" aria-label="Collection summary">${stats.map(([label,value,symbol,note],i)=>`<div class="stat"><div class="stat-top"><span>${label}</span>${icon(symbol)}</div><div class="stat-value ${i===3&&t.profit!==0?(t.profit>0?'positive':'negative'):''}">${value}</div><div class="stat-foot">${i===3&&t.profit>0?icon('trend'):''}${note}</div></div>`).join('')}</section>
   ${coveragePanel(state)}<div class="dashboard-grid"><section class="panel"><div class="panel-heading"><div><h2>Collection value</h2><p>Recorded collection totals</p></div><div class="range-picker" aria-label="History period">${['7','30','all'].map(r=>`<button data-range="${r}" class="${range===r?'active':''}" aria-pressed="${range===r}">${r==='all'?'All':`${r}D`}</button>`).join('')}</div></div>${chart()}<p class="day-note">These totals include additions, removals, and personal valuations. Open an item to see its price observations separately.</p></section><section class="panel"><div class="panel-heading"><h2>Collection highlights</h2><span class="small muted">By total value</span></div>${valuable.length?valuable.map((c,i)=>`<button class="top-card" data-entry="${esc(c.uid)}"><span class="rank">0${i+1}</span>${art(c)}<span class="card-summary"><strong>${esc(catalogueCardTitle(c))}</strong><small>${esc(cardSetTitle(c))} · ${c.quantity}×</small></span><span class="card-value">${euro(effectivePrice(c)*c.quantity)}</span></button>`).join(''):`<div class="small-empty">${icon('spark')}<h3>Make room for your favorites</h3><p>Your most valuable cards will find a home right here.</p><button class="text-button" data-action="discover">Discover your first card</button></div>`}</section></div>
   <section><div class="section-heading"><div><h2>${state.collection.length?'Worth a spot in your binder':'A few collector favorites'}</h2><p>A little inspiration for your next discovery.</p></div>${button('Explore catalogue','discover',null,'subtle small-button')}</div><div class="card-grid">${featured.map(c=>cardTile(c,'catalog')).join('')}</div>${featured.length?'<p class="card-footer-note">Featured prices are saved reference snapshots, dated on each card’s detail view. Open a card to request the latest available price.</p>':'<div class="notice">The featured catalogue is unavailable. You can still search for cards.</div>'}</section>`;
@@ -716,7 +750,15 @@ function maybeRefreshPrices() {
 document.addEventListener('click',async event=>{
   const el=event.target.closest('button,a,[data-action]');if(!el)return;
   try{
-    if(el.dataset.page){event.preventDefault();navigate(el.dataset.page);return;}
+    if(el.dataset.page){
+      event.preventDefault();
+      const fromMore=el.closest?.('.more-pages');
+      const fromMobile=fromMore||el.closest?.('.mobile-nav');
+      if(fromMore)closeModal();
+      navigate(el.dataset.page);
+      if(fromMobile)document.querySelector('#main')?.focus({preventScroll:true});
+      return;
+    }
     if(el.dataset.entry){const c=state.collection.find(c=>c.uid===el.dataset.entry);if(c)await openCard(c.id,c.lang,c);return;}
     if(el.dataset.wish){const c=state.wishlist.find(c=>c.uid===el.dataset.wish);if(c)await openCard(c.id,c.lang,null,c);return;}
     if(el.dataset.card){await openCard(el.dataset.card,el.dataset.lang);return;}
@@ -738,8 +780,19 @@ document.addEventListener('click',async event=>{
       case 'refresh-sealed-price':await refreshSealedPrice();break;
       case 'sealed-price-history':await showSealedHistory();break;
       case 'focus-search':navigate('catalog');document.querySelector('#catalog-query')?.focus();break;
-      case 'menu':document.querySelector('.sidebar').classList.toggle('mobile-open');break;
-      case 'close-menu':document.querySelector('.sidebar').classList.remove('mobile-open');break;
+      case 'more-navigation':
+        modalShell('More',`<nav class="more-pages" aria-label="More sections">${morePages.map(id=>pageButton(id)).join('')}</nav>`,true);
+        modal.classList.add('navigation-sheet');
+        break;
+      case 'install-app':
+        if(!await promptInstallation()&&!isInstalled()){
+          modalShell('Install Monstertrade',`<div class="install-instructions">
+            <p><strong>iPhone or iPad</strong> In Safari, choose Share, then Add to Home Screen. Enable Open as Web App if shown.</p>
+            <p><strong>Android or desktop</strong> Look for Install app in Chrome or Edge. On macOS Safari, choose File, then Add to Dock.</p>
+            <p>Launch Monstertrade from its new icon to open it in its own window.</p>
+          </div>`,true);
+        }
+        break;
       case 'close-modal':closeModal();break;
       case 'new-binder':newBinder();break;
       case 'toggle-modal-mode':captureCardDraft();modalMode=modalMode==='wish'?'collect':'wish';renderCardModal();break;
@@ -859,6 +912,10 @@ window.addEventListener('storage',event=>{
 });
 document.addEventListener('error',event=>{if(event.target instanceof HTMLImageElement){const img=event.target;img.hidden=true;img.parentElement?.classList.add('art-unavailable');}},true);
 
+setupInstallation(()=>{
+  const button=document.querySelector('[data-action="install-app"]');
+  if(button)button.hidden=true;
+});
 render();
 if(page==='sealed')void runSealedSearch();
 try {const response=await fetch('./featured.json');if(response.ok)featured=await response.json();if(page==='dashboard')render();else if(page==='catalog')updateCatalog();}catch{}

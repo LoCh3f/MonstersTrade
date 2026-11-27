@@ -6,6 +6,12 @@ A free Pokémon collection app with browser-local collections and a serverless p
 
 [Contributing](CONTRIBUTING.md) · [Git Flow](docs/GIT_FLOW.md) · [Security reports](SECURITY.md)
 
+## Install on your device
+
+Open [Monstertrade](https://monstertrade.loch3f.workers.dev) and choose **Install**. On iPhone or iPad, use Safari’s **Share → Add to Home Screen** and enable **Open as Web App** if shown. On macOS Safari, choose **File → Add to Dock**. Launch the app from its new icon to open it in a standalone window. If you previously added a browser shortcut, install the app again from the site.
+
+After the first online visit, the app can open your locally saved collection offline. Catalogue searches, price refreshes, and remote images require a connection. Export a JSON backup before moving to an installed app on a platform that gives it a separate storage space.
+
 ## Run locally
 
 Use Node.js 24 (the version in `.nvmrc`) and npm. Install the pinned deployment tools, create the local price tables, and start the full app:
