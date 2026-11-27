@@ -191,6 +191,7 @@ export function pokemonNameForIds(ids) {
 }
 
 export function catalogueCardTitle(card) {
+  if (card.id?.startsWith(`cc-${card.lang}-`) && card.pokemonName) return card.pokemonName;
   const alias = latinCardName(card);
   if (alias) return alias;
   if (card.kind === 'sealed' || marketLanguage(card.lang) === 'en' || !asianScript.test(card.name)) return card.name;

@@ -2,6 +2,7 @@
 import { providerMarketComparison } from './pricing.js';
 import { CATALOGUE_LANGUAGES } from './languages.js';
 import { catalogueAlias, pokemonNameForIds, printedSearchName, westernSearchTitle } from './pokemon-search.js';
+import { getRegionalCard, getRegionalSet, hasRegionalCatalogue, isRegionalIdentity, searchRegionalCards } from './regional-catalogue.js';
 
 const API = 'https://api.tcgdex.net/v2';
 const TIMEOUT_MS = 12_000;
@@ -82,7 +83,10 @@ function imageBase(value) {
   if (typeof value !== 'string') return '';
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'assets.tcgdex.net' ? url.href : '';
+    if (url.protocol !== 'https:' || url.username || url.password || url.port) return '';
+    if (url.hostname === 'assets.tcgdex.net') return url.href;
+    return url.hostname === 'img.cardcorpus.com' && /^\/s1\/(?:240|480|960)\/[a-f0-9]{32}\.avif$/.test(url.pathname)
+      ? url.origin + url.pathname : '';
   } catch {
     return '';
   }
@@ -155,6 +159,30 @@ export async function searchCards(query, lang = 'en', page = 1, pageSize = CATAL
   const pageNumber = Number(page);
   if (!Number.isInteger(pageNumber) || pageNumber < 1) throw new Error('Choose a valid catalogue page.');
   lang = language(lang);
+  const exactId = catalogueId.test(term);
+  if (term.startsWith('cc-')) {
+    return isRegionalIdentity(term, lang) ? searchRegionalCards(term, lang, pageNumber, pageSize, exactId) : [];
+  }
+  if (!hasRegionalCatalogue(lang)) return searchTCGdex(term, lang, pageNumber, pageSize);
+  // These two name catalogues can return another species or script. The
+  // regional index has matched names and print identities for both.
+  if (!exactId && (lang === 'zh-cn' || lang === 'th')) return searchRegionalCards(term, lang, pageNumber, pageSize, false);
+
+  // Use the same source for every page of a query. A match from TCGdex keeps
+  // its existing identity, including when the regional snapshot overlaps it.
+  let primaryError;
+  try {
+    const first = await searchTCGdex(term, lang, 1, pageSize);
+    if (first.length) return pageNumber === 1 ? first : searchTCGdex(term, lang, pageNumber, pageSize);
+  } catch (error) {
+    if (!(error instanceof CatalogueNotFound)) primaryError = error;
+  }
+  const regional = await searchRegionalCards(term, lang, pageNumber, pageSize, exactId);
+  if (!regional.length && primaryError) throw primaryError;
+  return regional;
+}
+
+async function searchTCGdex(term, lang, pageNumber, pageSize) {
   if (catalogueId.test(term)) return pageNumber === 1 ? [await getCard(term, lang)] : [];
   const westernSet = (lang === 'en' || lang === 'it') && term.match(/^(.+?)\s+(?:Pok[eé]mon(?:\s+Card)?\s+)?151$/i);
   if (westernSet) return cardList({ name: westernSearchTitle(westernSet[1], lang), 'set.id': 'eq:sv03.5' }, lang, pageNumber, pageSize);
@@ -228,11 +256,13 @@ export async function searchCardPrintings(query, page, onFirstResults) {
 }
 
 export async function getCard(id, lang = 'en', force = false) {
+  if (isRegionalIdentity(id, lang)) return getRegionalCard(cardId(id), lang);
   const data = await request(`${language(lang)}/cards/${encodeURIComponent(cardId(id))}`, { force });
   return normalizeCard(data, lang);
 }
 
 export async function getSet(id, lang = 'en') {
+  if (isRegionalIdentity(id, lang)) return getRegionalSet(cardId(id), lang);
   const data = await request(`${language(lang)}/sets/${encodeURIComponent(cardId(id))}`, { ttl: 86_400_000 });
   if (!data || typeof data.id !== 'string' || !Array.isArray(data.cards)) {
     throw new Error('The catalogue returned incomplete set details. Please try another set.');
@@ -251,6 +281,7 @@ export function cardImage(card, quality = 'low') {
   if (typeof local === 'string' && /^\.?\/?assets\/[a-zA-Z0-9._-]+\.(?:webp|png|jpg)$/.test(local)) return local;
   const base = imageBase(card?.image);
   if (!base) return '';
-  if (/\.(?:webp|png|jpg)$/i.test(base)) return base;
+  if (base.startsWith('https://img.cardcorpus.com/s1/480/')) return base.replace('/s1/480/', quality === 'high' ? '/s1/960/' : '/s1/240/');
+  if (/\.(?:webp|png|jpg|avif)$/i.test(base)) return base;
   return `${base.replace(/\/$/, '')}/${quality === 'high' ? 'high' : 'low'}.webp`;
 }
