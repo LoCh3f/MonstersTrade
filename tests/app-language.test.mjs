@@ -33,7 +33,7 @@ async function application(t, catalogueResponse = () => undefined) {
       const cards = [{ id: 'base1-4', name: 'Synthetic card', localId: '4' }];
       const value = path === '/api/health' ? { configured: false } : path === './featured.json' ? []
         : (await catalogueResponse(path)) ?? (path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards);
-      return Response.json(value);
+      return value instanceof Response ? value : Response.json(value);
     },
     setTimeout: (callback, delay) => {
       timers.set(++nextTimer, { callback, due: time + delay });
@@ -53,8 +53,8 @@ async function application(t, catalogueResponse = () => undefined) {
     return `from '${module.href}'`;
   });
   const app = await import('data:text/javascript;base64,' + Buffer.from(source + `
-    export const testState = () => ({ lang, query });
-    export function renderLanguage(value) { lang=value; query='Synthetic'; searching=false; searchResults=[{id:'base1-4',name:'Synthetic'}]; render(); updateCatalog(); }
+    export const testState = () => ({ lang: catalogueViewLanguage(), query });
+    export function renderLanguage(value) { searchLanguage=value; query='Synthetic'; searching=false; searchResults=[{id:'base1-4',name:'Synthetic'}]; render(); updateCatalog(); }
   `).toString('base64') + `#fixture-${fixtureId++}`);
   return { app, handlers, node, stored, requests, tick };
 }
@@ -118,8 +118,8 @@ test('choosing Japanese keeps name search in view and opens the selected printin
   handlers.get('submit')({ target: { id: 'catalog-form' }, preventDefault() {} });
   await new Promise(setImmediate);
   const results = node('#catalog-results').innerHTML;
-  assert.match(results, /aria-label="View Charizard ex · SV2a · #006"/);
-  assert.match(results, /aria-label="View Charizard ex · SV2a · #201"/);
+  assert.match(results, /aria-label="View Charizard ex · SV2a · #006 · Japanese"/);
+  assert.match(results, /aria-label="View Charizard ex · SV2a · #201 · Japanese"/);
   assert.match(results, /lang="ja">リザードンex/);
   assert.match(results, /Pokémon Card 151/);
 
@@ -160,8 +160,9 @@ test('an Italian printing-language qualifier selects Korean and links to the off
   await new Promise(setImmediate);
 
   assert.deepEqual(app.testState(), { lang: 'ko', query: 'Pikachu 151' });
-  assert.match(node('#app').innerHTML, /value="Pikachu 151 in coreano"/);
-  assert.equal(stored.get('pocketvault.lang'), 'ko');
+  assert.equal(input.value, 'Pikachu 151 in coreano');
+  assert.equal(node('#catalog-lang').value, 'ko');
+  assert.equal(stored.has('pocketvault.lang'), false);
   const searches = requests.filter(url => url.includes('/ko/cards?')).map(url => new URL(url).searchParams);
   assert.deepEqual(searches.map(params => params.get('set.id')), ['eq:SV2a', 'eq:SV2a']);
   assert.equal(searches.at(-1).get('name'), '피카츄');
@@ -171,10 +172,47 @@ test('an Italian printing-language qualifier selects Korean and links to the off
   const link = new URL(results.match(/href="([^"]+)"/)[1]);
   assert.equal(link.origin, 'https://pokemoncard.co.kr');
   assert.equal(link.searchParams.get('s'), '피카츄');
+
+  input.value = 'Pikachu';
+  handlers.get('input')({ target: input });
+  tick(300);
+  await new Promise(setImmediate);
+  assert.equal(app.testState().lang, 'all');
+});
+
+test('a name searches across languages by default and the filter keeps the same query', async t => {
+  const { app, handlers, node, requests, tick } = await application(t, path => {
+    if (path.includes('/en/cards?')) return [{id:'sv4-1',name:'Iron Hands ex',localId:'1'}];
+    if (path.includes('/it/cards?')) return [{id:'sv4-1',name:'Manoferrea-ex',localId:'1'}];
+    if (path.includes('/ja/cards?')) return [{id:'SV4M-027',name:'テツノカイナex',localId:'027'}];
+    if (path.includes('/ko/cards?')) return [{id:'SV4M-027',name:'무쇠손 ex',localId:'027'}];
+    if (path.includes('/th/cards?')) return new Response(null, {status: 503});
+    if (path.includes('/cards?')) return [];
+  });
+  assert.match(node('#app').innerHTML, /<option value="all" selected>All languages/);
+  const input = node('#catalog-query');
+  input.id = 'catalog-query';
+  input.value = 'Manoferrea-ex';
+  handlers.get('input')({ target: input });
+  tick(300);
+  await new Promise(setImmediate);
+  const results = () => node('#catalog-results').innerHTML;
+  assert.match(results(), /Results for “Manoferrea-ex” · All languages/);
+  for (const language of ['English', 'Italian', 'Japanese', 'Korean']) assert.match(results(), new RegExp(`· ${language}"`));
+  assert.match(results(), /Couldn’t search Thai/);
+  assert.ok(requests.some(url => url.includes('/en/cards?name=Iron+Hands+ex')));
+
+  handlers.get('change')({ target: { id: 'catalog-lang', value: 'ko' } });
+  await new Promise(setImmediate);
+  assert.deepEqual(app.testState(), { lang: 'ko', query: 'Manoferrea-ex' });
+  assert.match(results(), /· Korean"/);
+  assert.doesNotMatch(results(), /· (English|Italian|Japanese)"/);
+  assert.equal(input.value, 'Manoferrea-ex');
 });
 
 test('catalogue typing debounces requests, waits for a composed name, and clears results immediately', async t => {
   const { app, handlers, node, requests, tick } = await application(t);
+  handlers.get('change')({ target: { id: 'catalog-lang', value: 'en' } });
   const input = node('#catalog-query');
   input.id = 'catalog-query';
   const type = (value, isComposing = false) => {
@@ -213,6 +251,7 @@ test('an older catalogue response is ignored while a new search waits for its pa
   const { handlers, node, requests, tick } = await application(t, url => {
     if (new URL(url).searchParams.get('name') === 'Char') return earlier.promise;
   });
+  handlers.get('change')({ target: { id: 'catalog-lang', value: 'en' } });
   const input = node('#catalog-query');
   input.id = 'catalog-query';
   input.value = 'Char';
