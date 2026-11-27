@@ -1,6 +1,7 @@
 import { normalizePricing, normalizeQuote } from '../dist/pricing.js';
 import { marketCardKey, marketLanguage } from '../dist/languages.js';
 import { handleSealedRequest, refreshSealedScheduled } from './sealed.js';
+import { handleCardOffers } from './card-offers.js';
 import { checkRateLimit, deployCommit, operationalEvent, rateLimitsReady } from './security.js';
 
 const DAY = 86_400_000;
@@ -256,6 +257,7 @@ export async function handleRequest(request, env, context = {}, dependencies = {
   if (!['GET', 'HEAD'].includes(request.method)) return json({ error: 'Only public read requests are supported.' }, 405, { Allow: 'GET, HEAD' });
   const limited = await checkRateLimit(request, env);
   if (limited) return limited;
+  if (url.pathname.startsWith('/api/card-offers/')) return handleCardOffers(url, env, dependencies);
   if (url.pathname === '/api/sealed' || url.pathname.startsWith('/api/sealed/')) return handleSealedRequest(request, env, dependencies);
   if (url.pathname === '/api/health') {
     const info = { configured: false, service: 'public-prices', retentionDays: RETENTION_DAYS, scope: 'public quotes only', deployCommit: deployCommit(env) };

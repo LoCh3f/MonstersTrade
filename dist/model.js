@@ -1,9 +1,10 @@
 import { quoteStatus } from './pricing.js';
 import { safePhotoURL } from './photos.js';
 import { marketLanguage } from './languages.js';
+import { CARD_OFFER_CONDITIONS, cardOfferReference, normalizeCardOffers } from './card-offers.js';
 
 /** Immutable collection operations. Prices and purchase costs are per item, in EUR. */
-export const CONDITIONS = Object.freeze(['Near Mint', 'Excellent', 'Good', 'Played']);
+export const CONDITIONS = CARD_OFFER_CONDITIONS;
 export const SEALED_TYPES = Object.freeze([
   { id: 'booster-pack', label: 'Booster pack' },
   { id: 'booster-box', label: 'Booster box' },
@@ -19,7 +20,7 @@ const MAX_ROWS = 100000;
 const MAX_MONEY = 1e9;
 const MAX_QUANTITY = 1e6;
 const MAX_VALUATIONS = 1000;
-const JSON_COLUMNS = ['grading', 'manualValuation', 'market', 'lastValidMarket', 'variants', 'valuationHistory'];
+const JSON_COLUMNS = ['grading', 'manualValuation', 'market', 'lastValidMarket', 'variants', 'valuationHistory', 'cardOffers'];
 const CSV_COLUMNS = ['id', 'name', 'localId', 'image', 'setId', 'setName', 'setTotal', 'rarity', 'price', 'priceUpdated', 'lang', 'quantity', 'cost', 'condition', 'binderId', 'binderName', 'addedAt', 'variantId', 'variantLabel', 'kind', 'productType', 'edition', 'productCode', 'productUrl', 'sourceProductType', 'game', 'storesInStock', ...JSON_COLUMNS, 'pokemonName'];
 const SNAPSHOT_REASONS = ['visit', 'collection', 'prices', 'legacy'];
 
@@ -219,6 +220,7 @@ function cardMetadata(input, legacy = false) {
     grading: legacy ? null : grading(input.grading),
     manualValuation: personal,
     market,
+    ...(!legacy && !sealed && input.cardOffers ? { cardOffers: normalizeCardOffers(input.cardOffers, input.id, lang) } : {}),
     lastValidMarket: legacy || !input.lastValidMarket ? null : quote(input.lastValidMarket),
     variants: legacy ? [] : variants(input.variants),
   };
@@ -321,6 +323,9 @@ function mergeCard(previous, metadata, fields) {
     merged.valuationHistory = mergeValuationHistory(previous.valuationHistory, metadata.valuationHistory);
     merged.image = metadata.image || previous.image || '';
   }
+  if (previous.cardOffers && (!metadata.cardOffers || previous.cardOffers.observedAt > metadata.cardOffers.observedAt)) {
+    merged.cardOffers = previous.cardOffers;
+  }
   const oldMarket = previous.market || legacyQuote(previous);
   const oldDate = Date.parse(oldMarket.providerUpdatedAt);
   const newDate = Date.parse(metadata.market.providerUpdatedAt);
@@ -353,6 +358,7 @@ export function updateEntry(state, uid, details = {}) {
   if (!existing) fail('This collection entry no longer exists.');
   const next = { ...existing, ...details };
   if ((next.kind || 'card') !== (existing.kind || 'card')) fail('An existing entry cannot change between card and sealed product. Create a separate entry.');
+  if ((next.id !== existing.id || next.lang !== existing.lang) && !Object.hasOwn(details, 'cardOffers')) delete next.cardOffers;
   if (existing.kind === 'sealed') next.valuationHistory = mergeValuationHistory(existing.valuationHistory, details.valuationHistory);
   if (Object.hasOwn(details, 'price') && !Object.hasOwn(details, 'market')) {
     next.market = { ...existing.market, amount: details.price, providerUpdatedAt: Object.hasOwn(details, 'priceUpdated') ? details.priceUpdated : existing.market.providerUpdatedAt };
@@ -369,6 +375,8 @@ export function updateEntry(state, uid, details = {}) {
 export function effectivePrice(entry) {
   if (entry.manualValuation) return number(entry.manualValuation.amount, 'Personal valuation');
   if (entry.grading) return null;
+  const offer = cardOfferReference(entry);
+  if (offer) return offer.amount;
   if (entry.kind !== 'sealed' && marketLanguage(entry.lang) !== 'en') return null;
   const market = entry.market || legacyQuote(entry);
   if (entry.kind === 'sealed' && !usableSealedReference(entry, market)) return null;
@@ -390,7 +398,7 @@ export function priceCoverage(state, now = Date.now()) {
       result.manualValue += value * count;
       continue;
     }
-    const market = entry.market || legacyQuote(entry);
+    const market = cardOfferReference(entry) || entry.market || legacyQuote(entry);
     const status = quoteStatus(market, now);
     if (status === 'error') result.errorQuantity += count;
     if (market.mapping === 'unverified' || entry.grading || (entry.variantId && market.mapping !== 'matched') || (entry.kind === 'sealed' ? !usableSealedReference(entry, market) : marketLanguage(entry.lang) !== 'en') || status === 'unverified') result.unverifiedQuantity += count;
@@ -411,6 +419,10 @@ export function applyMarketUpdate(entry, bundle) {
   object(bundle, 'Price response');
   if (bundle.cardId !== entry.id) fail('The price response belongs to a different card.');
   if ((bundle.catalogueLanguage ?? 'en') !== marketLanguage(entry.lang)) fail('The price response belongs to a different catalogue language.');
+  if (bundle.cardOffers) {
+    const cardOffers = normalizeCardOffers(bundle.cardOffers, entry.id, entry.lang);
+    if (!entry.cardOffers || entry.cardOffers.observedAt < cardOffers.observedAt) entry = { ...entry, cardOffers };
+  }
   const old = entry.market ? quote(entry.market) : legacyQuote(entry);
   const attemptedAt = nullableTimestamp(bundle.lastAttemptAt || bundle.fetchedAt, 'Price attempt date');
   const oldAttempt = Date.parse(old.lastAttemptAt || old.fetchedAt);

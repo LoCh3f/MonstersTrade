@@ -79,6 +79,23 @@ test('persisted public cache survives reload and remains bounded', async t => {
   assert.equal(calls, 103);
 });
 
+test('CardTrader offers are requested by printing language and can succeed independently of the market trend', async t => {
+  storage(t);
+  const api = await client();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (path, options) => {
+    requests.push(path);
+    assert.equal(options.credentials, 'omit');
+    assert.equal(options.body, undefined);
+    if (path.startsWith('/api/card-offers/')) return response({ blueprintId: 406809, currency: 'EUR', language: 'it', observedAt: timestamp, prices: {'Near Mint': 1730} });
+    return response({}, 503, {'Retry-After': '900'});
+  });
+  const result = await api.getPrices('30th-148', {lang: 'it', cost: 20, condition: 'Excellent'});
+  assert.deepEqual(requests.sort(), ['/api/card-offers/30th-148?lang=it', '/api/prices/30th-148']);
+  assert.equal(result.cardOffers.prices['Near Mint'], 1730);
+  assert.match(result.lastError, /503/);
+});
+
 test('localized quotes stay separate across simultaneous requests and cache reloads', async t => {
   storage(t);
   const api = await client();

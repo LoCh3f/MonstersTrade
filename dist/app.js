@@ -1,5 +1,5 @@
 import { emptyState, normalizeState, addCard, updateEntry, removeEntry, totals, recordSnapshot, exportCSV, CONDITIONS, SEALED_TYPES, effectivePrice, applyMarketUpdate, applySealedMarketUpdate } from './model.js';
-import { searchCards, getCard, getSet, getSets, cardImage } from './catalog.js';
+import { CATALOGUE_PAGE_SIZE, searchCards, searchCardPrintings, getCard, getSet, getSets, cardImage } from './catalog.js';
 import { CATALOGUE_LANGUAGES, catalogueLanguage, languageLabel, marketCardKey, marketLanguage } from './languages.js';
 import { catalogueAlias, catalogueCardTitle, catalogueQuery, catalogueSetName, printedSearchName } from './pokemon-search.js';
 import { getPrices, getPriceHistory, priceServiceHealth } from './price-client.js';
@@ -9,6 +9,7 @@ import { searchSealed, getSealedProduct, getSealedHistory } from './sealed-clien
 import { sealedFields, sealedPricePanel, sealedValuationHistory, sealedPublicHistory, sealedIdentity, sealedAttribution } from './sealed-view.js';
 import { productImage, productPhotoSource, safePhotoURL } from './photos.js';
 import { isInstalled, promptInstallation, setupInstallation } from './install.js';
+import { cardOfferKey, cardOfferReference } from './card-offers.js';
 
 const icons = {
   home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -52,7 +53,9 @@ const catalogueSetLanguage = value => {
 const STORAGE_KEY = 'pocketvault.collection.v1';
 const MIGRATION_BACKUP_KEY = 'pocketvault.before-v2';
 const pages = {dashboard:'Overview',collection:'My collection',wishlist:'Wishlist',binders:'Binders',sets:'Set progress',catalog:'Discover cards',sealed:'Sealed products',settings:'Data & backups'};
-let state = emptyState(), storageWarning = '', recoveredRaw = '', lang = 'en', migrationBackup = '', migrationPending = false;
+const ALL_PRINTINGS = 'all';
+let state = emptyState(), storageWarning = '', recoveredRaw = '', migrationBackup = '', migrationPending = false;
+let lang = ALL_PRINTINGS, searchLanguage = ALL_PRINTINGS, catalogueSetsLanguage = 'en';
 try {
   const raw = localStorage.getItem(STORAGE_KEY);
   migrationBackup=localStorage.getItem(MIGRATION_BACKUP_KEY)||'';
@@ -67,12 +70,12 @@ try {
       }
     } catch { recoveredRaw = raw; storageWarning = 'Your saved data could not be read. Download a recovery copy in Data & backups before making changes.'; }
   }
-  lang = catalogueLanguage(localStorage.getItem('pocketvault.lang'));
+  catalogueSetsLanguage = catalogueLanguage(localStorage.getItem('pocketvault.lang'));
 } catch { storageWarning = 'Browser storage is unavailable. Changes will last for this visit only; export a backup before closing.'; }
 let page = pages[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard';
 let featured = [], query = '', searchPage = 1, searchResults = [], searchError = '', searching = false, searchTicket = 0, setView = null;
 const CATALOGUE_SEARCH_DELAY = 300;
-let catalogueInput = '', catalogueSearchTimer;
+let catalogueInput = '', catalogueSearchTimer, searchHasMore = false, searchUnavailable = [], finishingLanguages = false;
 let lastSetRequest = null, listingSets = false, catalogueSets = [];
 let collectionQuery = '', binderFilter = 'all', kindFilter = 'all', languageFilter = '', setFilter = '', valuationFilter = '';
 let sort = 'recent', view = 'grid', range = '30', collectionPage = 1;
@@ -222,8 +225,9 @@ function chart() {
 }
 function cardTile(card, type = 'catalog') {
   if(card.kind==='sealed')return sealedTile(card,type==='collection');
-  const attrs = type==='collection'?`data-entry="${esc(card.uid)}"`:`data-card="${esc(card.id)}" data-lang="${esc(card.lang||lang)}"`;
-  const isOwned = state.collection.some(c=>c.id===card.id&&c.lang===(card.lang||lang));
+  const cardLanguage = card.lang || catalogueSetLanguage(lang);
+  const attrs = type==='collection'?`data-entry="${esc(card.uid)}"`:`data-card="${esc(card.id)}" data-lang="${esc(cardLanguage)}"`;
+  const isOwned = state.collection.some(c=>c.id===card.id&&c.lang===cardLanguage);
   const knownPrice = Object.hasOwn(card,'price');
   const value=type==='collection'?effectivePrice(card):card.price;
   const select=type==='collection'?entryCheckbox(card):'';
@@ -232,8 +236,9 @@ function cardTile(card, type = 'catalog') {
   const number=card.localId?`#${card.localId}`:'';
   const printing=asian?[card.setId,number].filter(Boolean).join(' · '):'';
   const setName=cardSetTitle(card)||(printing?'':card.setId||'Pokémon TCG');
-  const accessibleTitle=printing?`${title} · ${printing}`:title;
-  return `<article class="pokemon-card">${select}<button class="card-open" ${attrs} aria-label="View ${esc(accessibleTitle)}"><div class="card-art">${art(card)}${type==='collection'?`<span class="card-badge">${card.quantity} owned</span>`:isOwned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(title)}</div>${title!==card.name?`<div class="card-native" lang="${esc(card.lang)}">${esc(card.name)}</div>`:''}${setName?`<div class="card-set">${esc(setName)}${!asian&&number?` · ${esc(number)}`:''}</div>`:''}${printing?`<div class="card-print">${esc(printing)}</div>`:''}</button><div class="card-bottom"><span class="card-price">${knownPrice?(value==null?'Not valued':type==='catalog'&&marketLanguage(card.lang)!=='en'?'View prices':euro(value)):'View details'}</span><button class="icon-button" ${attrs} aria-label="${type==='collection'?'Edit':'Add'} ${esc(accessibleTitle)}">${icon(type==='collection'?'chevron':'plus')}</button></div>${type==='collection'?`<div class="card-quantity">${esc(identityLabel(card))}</div>${priceBadge(card)}`:''}</article>`;
+  const printingLabel=[printing,type==='catalog'?languageLabel(cardLanguage):''].filter(Boolean).join(' · ');
+  const accessibleTitle=[title,printing||(type==='catalog'?number:''),type==='catalog'?languageLabel(cardLanguage):''].filter(Boolean).join(' · ');
+  return `<article class="pokemon-card">${select}<button class="card-open" ${attrs} aria-label="View ${esc(accessibleTitle)}"><div class="card-art">${art(card)}${type==='collection'?`<span class="card-badge">${card.quantity} owned</span>`:isOwned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(title)}</div>${title!==card.name?`<div class="card-native" lang="${esc(card.lang)}">${esc(card.name)}</div>`:''}${setName?`<div class="card-set">${esc(setName)}${!asian&&number?` · ${esc(number)}`:''}</div>`:''}${printingLabel?`<div class="card-print">${esc(printingLabel)}</div>`:''}</button><div class="card-bottom"><span class="card-price">${knownPrice?(value==null?'Not valued':type==='catalog'&&marketLanguage(card.lang)!=='en'?'View prices':euro(value)):'View details'}</span><button class="icon-button" ${attrs} aria-label="${type==='collection'?'Edit':'Add'} ${esc(accessibleTitle)}">${icon(type==='collection'?'chevron':'plus')}</button></div>${type==='collection'?`<div class="card-quantity">${esc(identityLabel(card))}</div>${priceBadge(card)}`:''}</article>`;
 }
 function sealedTile(product, owned=false) {
   const attrs=owned?`data-entry="${esc(product.uid)}"`:`data-sealed="${esc(product.id)}"`;
@@ -362,50 +367,58 @@ function collectionResults() {
   ${pages>1?`<div class="pagination"><button class="button subtle small-button" data-action="collection-previous" ${collectionPage===1?'disabled':''}>Previous</button><span>Page ${collectionPage} of ${pages}</span><button class="button subtle small-button" data-action="collection-next" ${collectionPage===pages?'disabled':''}>Next</button></div>`:''}`;
 }
 
+function catalogueViewLanguage() {
+  return lastSetRequest?.lang ?? (listingSets ? catalogueSetsLanguage : query ? searchLanguage : lang);
+}
 function catalog() {
-  const selected=CATALOGUE_LANGUAGES.find(item=>item.code===lang);
-  const asian=marketLanguage(lang)!=='en';
-  const examples=lang==='ja'?['Pikachu','Charizard ex 151','Caramella Rara']:lang==='ko'?['Manoferrea-ex','Contracchiappa-Pokémon']:asian?[selected?.example||'Pikachu']:['Pikachu','Charizard','Eevee','Mew','Gengar','Dragonite'];
-  const setName=setView?catalogueSetName(setView.name,setView.id,lang):'';
-  const subtitle=asian?`Search ${languageLabel(lang)} printings by name in English or Italian, or enter a card ID.`:'Search by name or card ID. Choose a printing language or try “Pikachu giapponese”.';
-  return `${heading(setView?esc(setName):'Discover cards',setView?`${esc(languageLabel(lang))} · ${esc(setView.id)}${setName!==setView.name?` · ${esc(setView.name)}`:''}`:subtitle)}
-  <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" type="search" aria-label="Search cards by name or catalogue ID" aria-controls="catalog-results" placeholder="${esc(selected?.example||'Pikachu')} or a card ID…" value="${esc(catalogueInput)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group"><label class="printing-language" for="catalog-lang"><span>Printing language</span><select id="catalog-lang">${CATALOGUE_LANGUAGES.map(({code,label})=>`<option value="${code}" ${lang===code?'selected':''}>${label}</option>`).join('')}${!selected?`<option value="${esc(lang)}" selected>${esc(languageLabel(lang))}</option>`:''}</select></label><button class="button primary" type="submit">${icon('search')}Search</button></div></form>
-  <div class="chips"><button class="chip ${listingSets?'active':''}" data-action="browse-catalogue-sets">Browse sets</button>${examples.map(name=>`<button class="chip" data-search="${esc(name)}">${esc(name)}</button>`).join('')}${setView||listingSets?'<button class="chip" data-action="clear-search">Clear</button>':''}</div><div id="catalog-results" aria-busy="${searching}">${catalogResults()}</div>`;
+  const language=catalogueViewLanguage();
+  const selected=CATALOGUE_LANGUAGES.find(item=>item.code===language);
+  const asian=marketLanguage(language)!=='en';
+  const examples=language==='ja'?['Pikachu','Charizard ex 151','Caramella Rara']:language==='ko'?['Manoferrea-ex','Contracchiappa-Pokémon']:asian?[selected?.example||'Pikachu']:['Pikachu','Charizard','Eevee','Caramella Rara'];
+  const setName=setView?catalogueSetName(setView.name,setView.id,language):'';
+  const subtitle='Search by name or card ID. You can filter the results by printing language.';
+  return `${heading(setView?esc(setName):'Discover cards',setView?`${esc(languageLabel(language))} · ${esc(setView.id)}${setName!==setView.name?` · ${esc(setView.name)}`:''}`:subtitle)}
+  <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" type="search" aria-label="Search cards by name or catalogue ID" aria-controls="catalog-results" placeholder="${esc(selected?.example||'Pikachu')} or a card ID…" value="${esc(catalogueInput)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group"><label class="printing-language" for="catalog-lang"><span>Printing language</span><select id="catalog-lang" aria-label="Printing language"><option value="all" ${language===ALL_PRINTINGS?'selected':''}>All languages</option>${CATALOGUE_LANGUAGES.map(({code,label})=>`<option value="${code}" ${language===code?'selected':''}>${label}</option>`).join('')}${!selected&&language!==ALL_PRINTINGS?`<option value="${esc(language)}" selected>${esc(languageLabel(language))}</option>`:''}</select></label><button class="button primary" type="submit">${icon('search')}Search</button></div></form>
+  <div class="chips" id="catalog-examples" ${catalogueInput.trim()?'hidden':''}><button class="chip ${listingSets?'active':''}" data-action="browse-catalogue-sets">Browse sets</button>${examples.map(name=>`<button class="chip" data-search="${esc(name)}">${esc(name)}</button>`).join('')}${setView||listingSets?'<button class="chip" data-action="clear-search">Clear</button>':''}</div><div id="catalog-results" aria-busy="${searching||finishingLanguages}">${catalogResults()}</div>`;
 }
 function catalogResults() {
   if(searching) return skeletons();
   if(searchError) return empty('info','Couldn’t load the catalogue',esc(searchError),'Try again','retry-search');
+  const language=catalogueViewLanguage();
   if(listingSets){
     if(!catalogueSets.length)return empty('sets','No sets available','This language has no sets in the source catalogue yet.','','');
-    const display=catalogueSets.slice((searchPage-1)*24,searchPage*24);
-    return `<div class="result-note"><span>${num(catalogueSets.length)} sets · ${esc(languageLabel(lang))}</span></div><div class="set-grid">${display.map(set=>`<button class="set-tile" data-set="${esc(set.id)}" data-lang="${esc(lang)}"><div class="set-tile-top">${icon('sets')}<span class="set-code">${esc(set.id)}</span></div><h3>${esc(catalogueSetName(set.name,set.id,lang))}</h3>${catalogueSetName(set.name,set.id,lang)!==set.name?`<p lang="${esc(lang)}">${esc(set.name)}</p>`:''}${Number.isInteger(set.cardCount?.total)?`<p>${num(set.cardCount.total)} cards in the catalogue</p>`:''}</button>`).join('')}</div>${cataloguePagination(searchPage*24>=catalogueSets.length)}`;
+    const display=catalogueSets.slice((searchPage-1)*CATALOGUE_PAGE_SIZE,searchPage*CATALOGUE_PAGE_SIZE);
+    return `<div class="result-note"><span>${num(catalogueSets.length)} sets · ${esc(languageLabel(language))}</span></div><div class="set-grid">${display.map(set=>`<button class="set-tile" data-set="${esc(set.id)}" data-lang="${esc(language)}"><div class="set-tile-top">${icon('sets')}<span class="set-code">${esc(set.id)}</span></div><h3>${esc(catalogueSetName(set.name,set.id,language))}</h3>${catalogueSetName(set.name,set.id,language)!==set.name?`<p lang="${esc(language)}">${esc(set.name)}</p>`:''}${Number.isInteger(set.cardCount?.total)?`<p>${num(set.cardCount.total)} cards in the catalogue</p>`:''}</button>`).join('')}</div>${cataloguePagination(searchPage*CATALOGUE_PAGE_SIZE>=catalogueSets.length)}`;
   }
   if(!query&&!setView&&catalogueInput.trim())return empty('search','Keep typing','Enter at least two characters to search as you type.','','');
-  const usingFeatured=!query&&!setView&&marketLanguage(lang)==='en';
-  if(!usingFeatured&&!query&&!setView)return empty('search',`Find ${esc(languageLabel(lang))} printings`,lang==='ja'?'Try “Pikachu”, “Charizard ex 151”, or a card ID like “SV2a-201”.':'Enter a Pokémon name such as Pikachu or the card’s catalogue ID.','','');
+  const usingFeatured=!query&&!setView&&marketLanguage(language)==='en';
+  if(!usingFeatured&&!query&&!setView)return empty('search',`Find ${esc(languageLabel(language))} printings`,language==='ja'?'Try “Pikachu”, “Charizard ex 151”, or a card ID like “SV2a-201”.':'Enter a Pokémon name such as Pikachu or the card’s catalogue ID.','','');
   const rows=usingFeatured?featured:searchResults;
+  const availability=query&&searchUnavailable.length?`<p class="notice warning">Couldn’t search ${esc(searchUnavailable.map(languageLabel).join(', '))}. <button class="text-button" data-action="retry-search">Try again</button></p>`:'';
   if(!rows.length){
     const pagination=searchPage>1?cataloguePagination(true):'';
-    if(lang==='ko'&&searchPage===1){
-      const alias=catalogueAlias(query,lang);
+    if(language==='ko'&&searchPage===1){
+      const alias=catalogueAlias(query,language);
       const url=new URL('https://pokemoncard.co.kr/cards');
-      if(alias?.nativeName)url.searchParams.set('s',printedSearchName(alias,lang));
+      if(alias?.nativeName)url.searchParams.set('s',printedSearchName(alias,language));
       return empty('search','No cards found',`TCGdex covers only some Korean printings. <a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">Search the official Pokémon Korea catalogue</a>.`,'','');
     }
-    return empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets')+pagination;
+    return availability+empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets')+pagination;
   }
-  const display=usingFeatured?rows:setView?rows.slice((searchPage-1)*24,searchPage*24):rows;
-  return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,lang))}`:`Results for “${esc(query)}” · ${esc(lang.toUpperCase())}`}</span><span>${usingFeatured?'Saved reference snapshots':'Open a card for details and pricing'}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${!usingFeatured?cataloguePagination(setView?searchPage*24>=rows.length:rows.length<24):'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>'}`;
+  const display=setView?rows.slice((searchPage-1)*CATALOGUE_PAGE_SIZE,searchPage*CATALOGUE_PAGE_SIZE):rows;
+  const scope=language===ALL_PRINTINGS?'All languages':language.toUpperCase();
+  return `${availability}<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,language))}`:`Results for “${esc(query)}” · ${esc(scope)}`}</span>${finishingLanguages?'<span role="status">Checking more languages…</span>':''}</div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${usingFeatured?'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>':finishingLanguages?'':cataloguePagination(setView?searchPage*CATALOGUE_PAGE_SIZE>=rows.length:!searchHasMore)}`;
 }
 function cataloguePagination(lastPage) {
   return `<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${lastPage?'disabled':''}>Next</button></div>`;
 }
 async function browseCatalogueSets() {
   const ticket=cancelCatalogueSearch();
+  if(lang!==ALL_PRINTINGS)catalogueSetsLanguage=lang;
   listingSets=true;setView=null;lastSetRequest=null;query='';catalogueInput='';searchPage=1;searching=true;searchError='';
   if(page==='catalog')render();
   try {
-    const sets=await getSets(lang);
+    const sets=await getSets(catalogueSetsLanguage);
     if(ticket===searchTicket)catalogueSets=sets.filter(set=>typeof set?.id==='string'&&typeof set.name==='string').reverse();
   }catch(error){if(ticket===searchTicket)searchError=error.message;}
   finally{if(ticket===searchTicket){searching=false;updateCatalog();}}
@@ -414,6 +427,7 @@ async function browseCatalogueSets() {
 function cancelCatalogueSearch() {
   clearTimeout(catalogueSearchTimer);
   catalogueSearchTimer=undefined;
+  finishingLanguages=false;
   return ++searchTicket;
 }
 
@@ -424,11 +438,10 @@ function searchCatalogue(value,{debounce=false,renderControls=false}={}) {
   const search=catalogueQuery(value.trim(),lang);
   const autoSearch=debounce&&[...search.term].length>=2;
   const start=()=>{
-    const languageChanged=search.lang!==lang;
-    if(languageChanged)selectCatalogueLanguage(search.lang);
     query=debounce&&!autoSearch?'':search.term;
+    searchLanguage=search.lang;
     searchPage=1;
-    return runSearch(renderControls||languageChanged);
+    return runSearch(renderControls);
   };
   if(!autoSearch)return start();
   cancelCatalogueSearch();
@@ -440,35 +453,56 @@ async function runSearch(renderControls=false) {
   const ticket=cancelCatalogueSearch();
   const leavingSet=Boolean(setView||lastSetRequest||listingSets);
   setView=null; lastSetRequest=null; listingSets=false; searchError='';
+  searchHasMore=false;searchUnavailable=[];
   searching=Boolean(query);
   if(!searching)searchResults=[];
   if((renderControls||leavingSet)&&page==='catalog')render();
   else updateCatalog();
   if(!searching)return;
-  try {const results=await searchCards(query,lang,searchPage);if(ticket!==searchTicket)return;searchResults=results;}
+  try {
+    if(searchLanguage===ALL_PRINTINGS){
+      const result=await searchCardPrintings(query,searchPage,cards=>{
+        if(ticket!==searchTicket)return;
+        searchResults=cards;searching=false;finishingLanguages=true;updateCatalog();
+      });
+      if(ticket!==searchTicket)return;
+      searchResults=result.cards;searchHasMore=result.hasMore;searchUnavailable=result.unavailable;
+    }else{
+      const results=await searchCards(query,searchLanguage,searchPage);
+      if(ticket!==searchTicket)return;
+      searchResults=results;searchHasMore=results.length>=CATALOGUE_PAGE_SIZE;
+    }
+  }
   catch(error){if(ticket!==searchTicket)return;searchError=error.message;}
-  finally{if(ticket===searchTicket){searching=false;updateCatalog();}}
+  finally{if(ticket===searchTicket){searching=false;finishingLanguages=false;updateCatalog();}}
 }
 function updateCatalog() {
   const container=document.querySelector('#catalog-results');
-  if(container){container.innerHTML=catalogResults();container.setAttribute('aria-busy',String(searching));}
+  if(container){container.innerHTML=catalogResults();container.setAttribute('aria-busy',String(searching||finishingLanguages));}
+  const select=document.querySelector('#catalog-lang');
+  if(select)select.value=catalogueViewLanguage();
+  const examples=document.querySelector('#catalog-examples');
+  if(examples)examples.hidden=Boolean(catalogueInput.trim());
 }
 function selectCatalogueLanguage(value) {
-  lang=catalogueLanguage(value);
+  lang=value===ALL_PRINTINGS?ALL_PRINTINGS:catalogueLanguage(value);
+  if(lang===ALL_PRINTINGS)return;
+  catalogueSetsLanguage=lang;
   try{localStorage.setItem('pocketvault.lang',lang);}catch{}
 }
 async function browseSet(id,language) {
   const ticket=cancelCatalogueSearch();
-  listingSets=false;lang=catalogueSetLanguage(language||lang);lastSetRequest={id,lang};query='';catalogueInput='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
-  try {const data=await getSet(id,lang);if(ticket!==searchTicket)return;setView=data;searchResults=data.cards.map(c=>({...c,lang,setId:data.id,setName:data.name}));}
+  const setLanguage=catalogueSetLanguage(language||catalogueViewLanguage());
+  listingSets=false;lastSetRequest={id,lang:setLanguage};query='';catalogueInput='';searchPage=1;searching=true;searchError='';setView=null;navigate('catalog');
+  try {const data=await getSet(id,setLanguage);if(ticket!==searchTicket)return;setView=data;searchResults=data.cards.map(c=>({...c,lang:setLanguage,setId:data.id,setName:data.name}));}
   catch(error){if(ticket!==searchTicket)return;searchError=error.message;}
   finally{if(ticket===searchTicket){searching=false;if(page==='catalog')render();}}
 }
 function wishlist() {
   const reference=c=>effectivePrice({...c,manualValuation:null});
-  const hit=c=>reference(c)!==null&&quoteStatus(c.market)==='current'&&reference(c)<=c.target;
+  const hit=c=>reference(c)!==null&&quoteStatus(cardOfferReference(c)||c.market)==='current'&&reference(c)<=c.target;
   const reached=state.wishlist.filter(hit).length;
-  return `${heading('Good things are worth chasing.',`${state.wishlist.length} items on your wishlist${reached?` · ${reached} at or below your target`:'. Your next great find starts here.'}`,button('Refresh prices','refresh','refresh','subtle')+button('Find sealed','discover-sealed','box','subtle')+button('Find cards','discover','plus','primary'))}${state.wishlist.length?`<div class="notice">Targets use current market references for your selection. Older, unverified and personal valuations do not trigger a target. Checks are shown here when the app is open.</div><div class="wishlist-grid">${state.wishlist.map(c=>`<article class="wish-row">${art(c)}<div class="wish-name"><strong>${esc(catalogueCardTitle(c))}</strong>${catalogueCardTitle(c)!==c.name?`<p lang="${esc(c.lang)}">${esc(c.name)}</p>`:''}<p>${esc(cardSetTitle(c))}${c.localId?` · #${esc(c.localId)}`:''}</p><p>${esc(identityLabel(c))}</p><p>Provider updated ${esc(dateLabel(c.priceUpdated))}</p>${priceBadge({...c,manualValuation:null})}</div><div class="wish-price"><span>Market reference</span><strong>${euro(reference(c))}</strong></div><div class="wish-price"><span>Your target</span><strong>${euro(c.target)}</strong></div><span class="target-tag ${hit(c)?'hit':''}">${hit(c)?'Within your target':reference(c)===null?'No matched reference':quoteStatus(c.market)!=='current'?'Refresh reference':`${euro(reference(c)-c.target)} above target`}</span><button class="icon-button" data-wish="${esc(c.uid)}" aria-label="Edit wishlist item ${esc(catalogueCardTitle(c))}">${icon('chevron')}</button></article>`).join('')}</div>`:empty('heart','Keep your next favorites close.','Save a card and its printing, then choose your target price.','Find a wishlist card','discover')}`;
+  return `${heading('Good things are worth chasing.',`${state.wishlist.length} items on your wishlist${reached?` · ${reached} at or below your target`:'. Your next great find starts here.'}`,button('Refresh prices','refresh','refresh','subtle')+button('Find sealed','discover-sealed','box','subtle')+button('Find cards','discover','plus','primary'))}${state.wishlist.length?`<div class="notice">Targets use current market references for your selection. Older, unverified and personal valuations do not trigger a target. Checks are shown here when the app is open.</div><div class="wishlist-grid">${state.wishlist.map(c=>`<article class="wish-row">${art(c)}<div class="wish-name"><strong>${esc(catalogueCardTitle(c))}</strong>${catalogueCardTitle(c)!==c.name?`<p lang="${esc(c.lang)}">${esc(c.name)}</p>`:''}<p>${esc(cardSetTitle(c))}${c.localId?` · #${esc(c.localId)}`:''}</p><p>${esc(identityLabel(c))}</p><p>Provider updated ${esc(dateLabel(c.priceUpdated))}</p>${priceBadge({...c,manualValuation:null})}</div><div class="wish-price"><span>Market reference</span><strong>${euro(reference(c))}</strong></div><div class="wish-price"><span>Your target</span><strong>${euro(c.target)}</strong></div><span class="target-tag ${hit(c)?'hit':''}">${hit(c)?'Within your target':reference(c)===null?'No matched reference':quoteStatus(cardOfferReference(c)||c.market)!=='current'?'Refresh reference':`${euro(reference(c)-c.target)} above target`}</span><button class="icon-button" data-wish="${esc(c.uid)}" aria-label="Edit wishlist item ${esc(catalogueCardTitle(c))}">${icon('chevron')}</button></article>`).join('')}</div>`:empty('heart','Keep your next favorites close.','Save a card and its printing, then choose your target price.','Find a wishlist card','discover')}`;
 }
 
 function binders() {
@@ -480,7 +514,7 @@ function sets() {
   return `${heading('One card closer.', 'Watch your sets come together, one discovery at a time.',button('Discover cards','discover','plus','primary'))}${groups.size?`<div class="notice">Progress counts unique card numbers in each language, including secret cards. Duplicate copies, foil variations, and condition do not increase set completion.</div><div class="set-grid">${[...groups.values()].map(s=>{const progress=s.setTotal?Math.min(100,s.ids.size/s.setTotal*100):0;return `<button class="set-tile" data-set="${esc(s.setId)}" data-lang="${esc(s.lang)}"><div class="set-tile-top">${icon('sets')}<span class="set-code">${esc(s.lang.toUpperCase())} · ${esc(s.setId.toUpperCase())}</span></div><h3>${esc(catalogueSetName(s.setName,s.setId,s.lang))}</h3><p>${num(s.ids.size)} unique cards collected</p><div class="progress"><span style="width:${progress}%"></span></div><div class="progress-labels"><span>${s.ids.size} / ${s.setTotal||'?'} cards</span><span>${s.setTotal?`${progress.toFixed(1)}%`:'Total unavailable'}</span></div></button>`;}).join('')}</div>`:empty('sets','Small discoveries. Complete collections.','Add cards to your vault to start tracking the sets you’re building.')}`;
 }
 function settings() {
-  return `${heading('Your collection. Your data.','Keep a copy of what matters. Take it with you whenever you like.')}${recoveredRaw?`<div class="notice warning">Unreadable saved data is protected. ${button('Download recovery copy','recover',null,'small-button')} ${button('Start a new vault','resolve-recovery',null,'small-button')}</div>`:''}<div class="settings-grid"><section class="panel settings-card"><h2>${icon('download')}Back up your vault</h2><p>A JSON backup includes cards, sealed products, variants, grading, personal valuation histories, wishlist, binders, and collection totals. CSV exports your collection entries.</p><div class="settings-actions">${button('Download JSON','export-json','download','primary')}${button('Export CSV','export-csv','download','subtle')}${migrationBackup?button('Download pre-upgrade backup','migration-backup','download','subtle'):''}</div></section><section class="panel settings-card"><h2>${icon('upload')}Bring your collection along</h2><p>Restore a version 1 or 2 JSON backup, or merge a CSV export. Older entries keep their quantities and costs; their variant remains unspecified until you choose it.</p>${button('Import a file','import','upload','subtle')}</section><section class="panel settings-card"><h2>${icon('shield')}Your holdings stay on this device</h2><p>There is no application account. Quantities, costs, grading and personal valuations stay in this browser. Clearing browser data removes your vault.</p><p>Public card and sealed product identifiers are sent to the price service. Cloudflare stores shared market quotations and their history; it does not receive your holdings or purchase costs. Card searches go to TCGdex; sealed searches use the shared public catalogue.</p><p class="small">Export a JSON backup before changing browsers or site addresses.</p></section><section class="panel settings-card"><h2>${icon('refresh')}Shared price references</h2><p>${priceService===null?'Checking price service…':priceService.configured?'The shared price service is available.':'The shared price service is unavailable. Saved references remain visible.'}</p><p>Recently consulted cards are scheduled for daily checks. The sealed catalogue uses a shared daily feed. Both depend on source availability and service capacity. Opening or returning to the app checks your saved references when needed. A manual check respects the provider cooldown.</p>${button(refreshing?'Checking…':'Check saved references','refresh','refresh','subtle')}</section><section class="panel settings-card"><h2>${icon('chart')}Know what the numbers mean</h2><p>A generic card reference is not a quotation for a specific language, condition or grade. Sealed references are EU retail asking prices; their language is unspecified. Shipping and taxes are excluded. A named variant is valued automatically only when its product and price metric have a reviewed mapping.</p><p>Add a personal per-item valuation where needed. It overrides the automatic reference in your total and survives price updates. Graded cards require a personal valuation.</p><p class="small">The public price history contains recorded provider observations. Your collection chart also includes changes to what you own; it is not a market-return chart.</p></section><section class="panel settings-card"><h2>${icon('info')}Made for collectors</h2><p>Monstertrade is independent of DarkDex, Nintendo, The Pokémon Company and TCGdex. Pokémon card names and artwork belong to their respective owners.</p><a href="https://tcgdex.dev/markets-prices" target="_blank" rel="noopener noreferrer">About the pricing source</a></section></div>`;
+  return `${heading('Your collection. Your data.','Keep a copy of what matters. Take it with you whenever you like.')}${recoveredRaw?`<div class="notice warning">Unreadable saved data is protected. ${button('Download recovery copy','recover',null,'small-button')} ${button('Start a new vault','resolve-recovery',null,'small-button')}</div>`:''}<div class="settings-grid"><section class="panel settings-card"><h2>${icon('download')}Back up your vault</h2><p>A JSON backup includes cards, sealed products, variants, grading, personal valuation histories, wishlist, binders, and collection totals. CSV exports your collection entries.</p><div class="settings-actions">${button('Download JSON','export-json','download','primary')}${button('Export CSV','export-csv','download','subtle')}${migrationBackup?button('Download pre-upgrade backup','migration-backup','download','subtle'):''}</div></section><section class="panel settings-card"><h2>${icon('upload')}Bring your collection along</h2><p>Restore a version 1 or 2 JSON backup, or merge a CSV export. Older entries keep their quantities and costs; their variant remains unspecified until you choose it.</p>${button('Import a file','import','upload','subtle')}</section><section class="panel settings-card"><h2>${icon('shield')}Your holdings stay on this device</h2><p>There is no application account. Quantities, costs, grading and personal valuations stay in this browser. Clearing browser data removes your vault.</p><p>Public card and sealed product identifiers are sent to the price service. Cloudflare stores shared market quotations and their history; it does not receive your holdings or purchase costs. Card searches go to TCGdex; sealed searches use the shared public catalogue.</p><p class="small">Export a JSON backup before changing browsers or site addresses.</p></section><section class="panel settings-card"><h2>${icon('refresh')}Shared price references</h2><p>${priceService===null?'Checking price service…':priceService.configured?'The shared price service is available.':'The shared price service is unavailable. Saved references remain visible.'}</p><p>Recently consulted cards are scheduled for daily checks. The sealed catalogue uses a shared daily feed. Both depend on source availability and service capacity. Opening or returning to the app checks your saved references when needed. A manual check respects the provider cooldown.</p>${button(refreshing?'Checking…':'Check saved references','refresh','refresh','subtle')}</section><section class="panel settings-card"><h2>${icon('chart')}Know what the numbers mean</h2><p>CardTrader offers apply to the displayed printing, language and condition. Market trends are for the card overall. Sealed references are EU retail asking prices; their language is unspecified. Shipping and taxes are excluded. A named variant is valued automatically only when its product and price metric have a reviewed mapping.</p><p>Add a personal per-item valuation where needed. It overrides the automatic reference in your total and survives price updates. Graded cards require a personal valuation.</p><p class="small">The public price history contains recorded provider observations. Your collection chart also includes changes to what you own; it is not a market-return chart.</p></section><section class="panel settings-card"><h2>${icon('info')}Made for collectors</h2><p>Monstertrade is independent of DarkDex, Nintendo, The Pokémon Company and TCGdex. Pokémon card names and artwork belong to their respective owners.</p><a href="https://tcgdex.dev/markets-prices" target="_blank" rel="noopener noreferrer">About the pricing source</a></section></div>`;
 }
 
 function modalShell(title,body,small=false) {
@@ -498,7 +532,7 @@ function priceFailure(card,message) {
   const prepared=ensureMarket(card);
   return {...prepared,market:{...prepared.market,lastAttemptAt:new Date().toISOString(),lastError:message}};
 }
-async function openCard(id,language=lang,entry=null,wish=null) {
+async function openCard(id,language=catalogueSetLanguage(lang),entry=null,wish=null) {
   if(entry?.kind==='sealed'||wish?.kind==='sealed'){await openSealed(id,entry,wish);return;}
   const ticket=++modalTicket;++modalHistoryTicket;
   modalCard=null;modalBundle=null;modalWarning='';modalDraft=null;modalEntry=entry;modalWish=wish;modalMode=wish?'wish':'collect';
@@ -615,7 +649,7 @@ function renderCardModal() {
   const c=modalCard;if(!c)return;
   const title=catalogueCardTitle(c);
   const e=modalEntry,w=modalWish,d=modalDraft||{},wishMode=modalMode==='wish';
-  modalShell(title,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(title)}"></a>`:icon('cards')}<p class="modal-card-meta">${title!==c.name?`<span lang="${esc(c.lang)}">${esc(c.name)}</span><br>`:''}${esc(catalogueSetName(c.setName,c.setId,c.lang))}${c.setId&&marketLanguage(c.lang)!=='en'?` · ${esc(c.setId)}`:''}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${marketPanel(c,modalBundle)}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
+  modalShell(title,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(title)}"></a>`:icon('cards')}<p class="modal-card-meta">${title!==c.name?`<span lang="${esc(c.lang)}">${esc(c.name)}</span><br>`:''}${esc(catalogueSetName(c.setName,c.setId,c.lang))}${c.setId&&marketLanguage(c.lang)!=='en'?` · ${esc(c.setId)}`:''}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${marketPanel({...c,condition:wishMode?'Near Mint':d.condition||c.condition},modalBundle)}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
   const form=document.querySelector('#card-form');
   for(const name of ['gradingCompany','gradingGrade','manualAmount','manualNote','manualUrl'])if(Object.hasOwn(d,name)&&form.elements[name])form.elements[name].value=d[name];
   if(d.manualAmount)form.querySelector('.personal-fields')?.setAttribute('open','');
@@ -632,6 +666,7 @@ function saveCard(form) {
     if(latest&&latest.variantId===selected.variantId&&Date.parse(latest.market?.lastAttemptAt||latest.market?.fetchedAt||'')>Date.parse(selected.market?.lastAttemptAt||selected.market?.fetchedAt||'1970-01-01')){
       selected={...selected,market:latest.market,lastValidMarket:latest.lastValidMarket,price:latest.price,priceUpdated:latest.priceUpdated,variants:latest.variants};
     }
+    if(latest?.cardOffers&&(!selected.cardOffers||latest.cardOffers.observedAt>selected.cardOffers.observedAt))selected={...selected,cardOffers:latest.cardOffers};
     if(modalMode==='wish') {
       const target=Number(data.get('target'));
       const existing=modalWish||state.wishlist.find(w=>w.id===selected.id&&w.lang===selected.lang&&w.variantId===selected.variantId&&JSON.stringify(w.grading)===JSON.stringify(grading));
@@ -723,7 +758,7 @@ async function refreshPrices({automatic=false}={}) {
   if(refreshing)return;
   if(recoveredRaw||migrationPending){if(!automatic)toast('Back up and resolve the saved-data warning before refreshing.');return;}
   const eligible=[...state.collection,...state.wishlist].filter(c=>c.kind!=='sealed'||/^sealed-tcgp-[1-9]\d*-eu$/.test(c.id));
-  const keyFor=c=>c.kind==='sealed'?`sealed:${c.id}`:`card:${marketCardKey(c.id,marketLanguage(c.lang))}`;
+  const keyFor=c=>c.kind==='sealed'?`sealed:${c.id}`:`card:${cardOfferKey(c.id,c.lang)||marketCardKey(c.id,marketLanguage(c.lang))}`;
   const identities=new Map(eligible.map(c=>[keyFor(c),{id:c.id,kind:c.kind||'card',lang:c.lang}]));
   const all=[...identities.keys()];
   if(!all.length){if(!automatic)toast('No linked market references to refresh. Open a custom sealed product to record a new valuation.');return;}
@@ -737,7 +772,7 @@ async function refreshPrices({automatic=false}={}) {
   try{
     const merge=c=>updates.has(keyFor(c))?(c.kind==='sealed'?applySealedMarketUpdate(c,updates.get(keyFor(c))):applyMarketUpdate(c,{...updates.get(keyFor(c)),cardId:c.id})):errors.has(keyFor(c))?priceFailure(c,errors.get(keyFor(c))):c;
     commit({...state,collection:state.collection.map(merge),wishlist:state.wishlist.map(merge)},state.collection.length>0,'prices');
-    const failed=errors.size+[...updates.values()].filter(b=>b.lastError).length;
+    const failed=errors.size+[...updates.values()].filter(b=>b.lastError&&!b.cardOffers).length;
     if(!automatic)toast(`${updates.size} item references checked.${failed?` ${failed} could not update; previous observations retained.`:''}${all.length>100?' Up to 100 items per check; check again to continue.':''}`);
   }catch(error){toast(error.message);}finally{refreshing=false;if(page==='settings')render();}
 }
@@ -881,6 +916,10 @@ document.addEventListener('change',event=>{
     if(old){const host=document.createElement('div');host.innerHTML=sealedPricePanel(preview);old.replaceWith(host.querySelector('.market-estimate'));}
   }
   if(event.target.id==='card-variant'){captureCardDraft();++modalHistoryTicket;renderCardModal();}
+  if(event.target.id==='card-condition'&&modalCard?.cardOffers){
+    captureCardDraft();
+    document.querySelector('#market-panel').innerHTML=marketPanel({...modalCard,condition:modalDraft.condition},modalBundle);
+  }
   if(event.target.id==='binder-filter'){binderFilter=event.target.value;updateCollectionResults(true);}
   if(event.target.id==='kind-filter'){kindFilter=event.target.value;updateCollectionResults(true);}
   if(event.target.id==='language-filter'){languageFilter=event.target.value;updateCollectionResults(true);}
@@ -895,7 +934,7 @@ document.addEventListener('change',event=>{
   if(event.target.id==='catalog-lang'){
     selectCatalogueLanguage(event.target.value);event.target.value=lang;
     const term=catalogueQuery(document.querySelector('#catalog-query').value.trim(),lang).term;
-    if(!term&&listingSets)void browseCatalogueSets();
+    if(!term&&listingSets&&lang!==ALL_PRINTINGS)void browseCatalogueSets();
     else void searchCatalogue(term,{renderControls:true});
   }
   if(event.target.id==='import-file'){readImport(event.target.files[0]);event.target.value='';}

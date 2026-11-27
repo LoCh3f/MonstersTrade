@@ -150,6 +150,38 @@ test('direct card ID search stays in the selected catalogue and preserves the re
   assert.deepEqual(requests, ['https://api.tcgdex.net/v2/ja/cards/sv2a-025']);
 });
 
+test('combined card-ID search keeps distinct language printings and ignores catalogue misses', async t => {
+  const { searchCardPrintings } = await freshCatalog();
+  t.mock.method(globalThis, 'fetch', async url => {
+    const path = new URL(url).pathname;
+    if (path.includes('/zh-cn/')) return new Response(null, {status: 503});
+    if (!/\/(en|it)\/cards\//.test(path)) return new Response(null, {status: 404});
+    return response(card());
+  });
+  const result = await searchCardPrintings(card().id, 1);
+  assert.deepEqual(result.cards.map(({id,lang})=>[id,lang]), [[card().id,'en'],[card().id,'it']]);
+  assert.equal(result.hasMore, false);
+  assert.deepEqual(result.unavailable, ['zh-cn']);
+});
+
+test('mixed results reserve room for each available language and page the underlying catalogues', async t => {
+  const { searchCardPrintings } = await freshCatalog();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const path = new URL(url);
+    const language = path.pathname.split('/')[2];
+    requests.push(path);
+    const page = Number(path.searchParams.get('pagination:page'));
+    const limit = Number(path.searchParams.get('pagination:itemsPerPage'));
+    return response(['en','it'].includes(language) ? Array.from({length:limit},(_,i)=>({id:`set-${(page-1)*limit+i+1}`, localId:i+1, name:language==='it'?'Caramella Rara':'Rare Candy'})) : []);
+  });
+  const {cards,hasMore}=await searchCardPrintings('Caramella Rara', 2);
+  assert.deepEqual(cards.map(({id,lang})=>[id,lang]), [['set-4','en'],['set-4','it'],['set-5','en'],['set-5','it'],['set-6','en'],['set-6','it']]);
+  assert.equal(hasMore, true);
+  assert.equal(requests.find(url=>url.pathname.includes('/en/')).searchParams.get('name'), 'Rare Candy');
+  assert.equal(requests.find(url=>url.pathname.includes('/it/')).searchParams.get('name'), 'Caramella Rara');
+});
+
 test('a Latin Pokémon name searches the selected Asian catalogue by exact Pokédex ID', async t => {
   const { searchCards } = await freshCatalog();
   const urls = [];

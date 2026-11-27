@@ -2,12 +2,13 @@ import { quoteStatus } from './pricing.js';
 import { effectivePrice, priceCoverage } from './model.js';
 import { sealedIdentity } from './sealed-view.js';
 import { languageLabel, marketLanguage } from './languages.js';
+import { cardOfferReference } from './card-offers.js';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money = (amount, currency = 'EUR') => amount == null ? 'Unavailable' : new Intl.NumberFormat('en-IE', {style:'currency',currency}).format(amount);
 const comparisonLabels = {low:'Marketplace low', avg7:'7-day average', avg30:'30-day average'};
 const date = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('en-GB',{dateStyle:'medium'}).format(new Date(value)) : 'Unknown';
-const statusLabels = {current:'Current reference',stale:'Older reference',missing:'No quotation',unverified:'Needs verification',error:'Update failed'};
+const statusLabels = {current:'Market trend',stale:'Older market trend',missing:'No market price',unverified:'Price not verified',error:'Price refresh failed'};
 
 export function priceBadge(card) {
   if(card.manualValuation) return '<span class="price-tag personal">Personal valuation</span>';
@@ -17,10 +18,17 @@ export function priceBadge(card) {
     return `<span class="price-tag ${status==='current'?'':'caution'}">${status==='error'?'Update failed':status==='stale'?'Older retail reference':'EU retail reference'}</span>`;
   }
   if(card.grading) return '<span class="price-tag caution">Graded · valuation needed</span>';
+  const offer = cardOfferReference(card);
+  if (offer) {
+    const status = quoteStatus(offer);
+    const label = offer.amount === null ? 'No matching offers' : status === 'current' ? 'Lowest CardTrader offer' : 'Last seen on CardTrader';
+    return `<span class="price-tag ${status === 'current' ? '' : 'caution'}">${label}</span>`;
+  }
   if(marketLanguage(card.lang)!=='en') return '<span class="price-tag caution">Personal valuation needed</span>';
   const quote=card.market;
   const status=quote?quoteStatus(quote):'unverified';
-  return `<span class="price-tag ${status==='current'?'':'caution'}">${esc(statusLabels[status]||'Needs verification')}${quote?.mapping==='generic'?' · generic':''}</span>`;
+  const label = status === 'error' && quote?.amount != null ? 'Saved market trend · refresh failed' : statusLabels[status];
+  return `<span class="price-tag ${status==='current'?'':'caution'}">${esc(label||'Price not verified')}</span>`;
 }
 
 export function identityLabel(card) {
@@ -54,9 +62,12 @@ export function marketPanel(card, bundle=null) {
   const status = q ? quoteStatus(q) : 'unverified';
   const product = q?.productId ?? generic?.productId;
   const amount = q?.amount ?? card.price;
+  const offer = cardOfferReference(card);
+  const offerPanel = offer ? `<div class="market-comparison"><h4>CardTrader · ${esc(languageLabel(card.lang))} · ${esc(card.condition || 'Near Mint')}</h4><p><strong>${offer.amount === null ? 'No matching offers' : money(offer.amount)}</strong> · Checked ${date(offer.providerUpdatedAt)}</p><p>Lowest available single-card offer in EUR, before shipping.</p><a href="https://www.cardtrader.com/en-EU/cards/${offer.productId}" target="_blank" rel="noopener noreferrer">View CardTrader offers ↗</a></div>` : '';
   const subtitle = asian ? `Catalogue reference · ${languageLabel(card.lang)}` : q?.mapping === 'matched' ? 'Matched variant' : 'Cardmarket trend · EUR';
   const personal = card.manualValuation ? `<div class="personal-summary"><strong>${money(effectivePrice(card))} per card in your collection</strong><p>Personal valuation · ${date(card.manualValuation.updatedAt)}</p></div>` : '';
   return `${personal}<section class="market-estimate">
+    ${offerPanel}
     <div class="price-market-heading"><div><h3>Market prices</h3><p>${esc(subtitle)}</p><strong>${money(amount)}</strong></div><span class="price-tag ${status==='current'?'':'caution'}">${esc(statusLabels[status]||'Needs verification')}</span></div>
     ${amount != null ? `<p class="quote-date">${esc(q?.source||'Imported reference')} · ${date(q?.providerUpdatedAt||card.priceUpdated)}</p>` : '<p class="quote-date">No EUR trend for this selection.</p>'}
     ${asian ? `<p ${card.manualValuation?'':'class="price-warning"'}>Marketplace data can cover multiple languages.${card.manualValuation?'':' Add a personal valuation to include this card in your collection total.'}</p>` : '<p>Market reference before condition, language and grading adjustments.</p>'}
@@ -66,7 +77,7 @@ export function marketPanel(card, bundle=null) {
     ${amount == null && previous?.amount != null ? `<p>Previous observation: ${money(previous.amount)} · ${date(previous.providerUpdatedAt)}.</p>` : ''}
     ${card.variantId && (comparison?.cardmarket || comparison?.tcgplayer) ? '<p class="market-comparison-scope">Marketplace benchmarks for the card</p>' : ''}
     ${marketComparison(comparison)}
-    <div class="price-panel-actions"><button type="button" class="text-button" data-action="refresh-card-price">Check prices</button><button type="button" class="text-button" data-action="price-history">Price history</button>${product ? `<a href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(product)}" target="_blank" rel="noopener noreferrer">Cardmarket ↗</a>` : ''}</div>
+    <div class="price-panel-actions"><button type="button" class="text-button" data-action="refresh-card-price">Check prices</button><button type="button" class="text-button" data-action="price-history">${offer ? 'Market trend history' : 'Price history'}</button>${product ? `<a href="https://www.cardmarket.com/en/Pokemon/Products?idProduct=${encodeURIComponent(product)}" target="_blank" rel="noopener noreferrer">Cardmarket ↗</a>` : ''}</div>
     <details class="market-provenance"><summary>Quote details</summary><dl class="quote-details"><div><dt>Provider date</dt><dd>${date(q?.providerUpdatedAt)}</dd></div><div><dt>Last successful check</dt><dd>${date(q?.fetchedAt)}</dd></div><div><dt>Last attempt</dt><dd>${date(q?.lastAttemptAt)}</dd></div><div><dt>Metric</dt><dd>${esc(q?.metric||'legacy')}</dd></div></dl></details>
   </section><div id="card-price-history" aria-live="polite"></div>`;
 }
