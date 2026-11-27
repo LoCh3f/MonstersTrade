@@ -71,7 +71,7 @@ test('set catalogue language DOM input is canonical before rendering or requesti
   assert.equal(app.testState().lang, 'en');
   assert.equal(select.value, 'en');
   assert.equal(stored.get('pocketvault.lang'), 'en');
-  assert.ok(requests.includes('https://api.tcgdex.net/v2/en/sets'));
+  assert.ok(requests.some(url => url === 'https://api.tcgdex.net/v2/en/sets'));
   assert.ok(node('#catalog-results').innerHTML.includes(' · English'));
   assert.equal(node('#catalog-results').innerHTML.includes(payload.toUpperCase()), false);
 
@@ -79,6 +79,7 @@ test('set catalogue language DOM input is canonical before rendering or requesti
   await new Promise(setImmediate);
   assert.equal(app.testState().lang, 'it');
   assert.equal(stored.get('pocketvault.lang'), 'it');
+  assert.ok(requests.some(url => url === 'https://api.tcgdex.net/v2/it/sets'));
   assert.ok(node('#catalog-results').innerHTML.includes(' · Italian'));
 
   await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'base1', lang: payload } }) } });
