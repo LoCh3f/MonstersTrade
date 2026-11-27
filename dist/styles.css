@@ -130,3 +130,101 @@ dialog:not(.modal-small){width:min(860px,calc(100vw - 32px))}.modal-columns{grid
 
 .card-native, .card-print { color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 3px; overflow-wrap: anywhere; }
 .printing-language { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+
+/* Navigation and touch layout */
+.sidebar > .nav { margin-top: 22px; }
+.mobile-nav { display: none; }
+.more-pages { display: grid; gap: 6px; }
+.more-pages button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+.more-pages button:hover, .more-pages button.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.more-pages svg { width: 21px; height: 21px; flex: none; color: var(--accent); }
+
+@media (max-width: 767px) {
+  :root { --bottom-nav-height: 62px; }
+  html { scroll-padding-top: calc(64px + env(safe-area-inset-top)); scroll-padding-bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom)); }
+  .sidebar, .breadcrumb > svg, .breadcrumb > strong, .top-actions .global-search, .local-status { display: none; }
+  .app-shell { margin-left: 0; }
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    height: auto;
+    min-height: calc(57px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    background: var(--bg);
+  }
+  .brand-wordmark { font-size: 19px; }
+  .main {
+    padding: 22px max(16px, env(safe-area-inset-right)) calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 22px) max(16px, env(safe-area-inset-left));
+    min-height: calc(100dvh - 57px - env(safe-area-inset-top));
+  }
+  h1 { font-size: clamp(26px, 7vw, 34px); overflow-wrap: anywhere; }
+  .page-heading { flex-direction: column; gap: 12px; margin-bottom: 20px; }
+  .page-heading p { max-width: none; }
+  .heading-actions { gap: 8px; }
+  .heading-actions .button.subtle { display: inline-flex; }
+  .heading-actions .button, .button.primary, .toolbar select, .search-field { min-height: 44px; }
+  .toolbar input, .form-field input, .form-field select, .form-field textarea { font-size: 16px; }
+  .hero { min-height: 173px; padding: 18px; margin-bottom: 16px; border-radius: 16px; }
+  .hero h2 { max-width: 225px; font-size: 24px; }
+  .hero p { max-width: 205px; }
+  .hero-actions { margin-top: 13px; }
+  .hero-art { opacity: .55; pointer-events: none; }
+  .stats { gap: 10px; margin-bottom: 16px; }
+  .stat { min-width: 0; border-radius: 14px; }
+  .stat-value { overflow-wrap: anywhere; }
+  .dashboard-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .card-grid, .collection-grid, .set-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+
+  .mobile-nav {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: start;
+    min-height: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom));
+    padding: 4px max(5px, env(safe-area-inset-right)) env(safe-area-inset-bottom) max(5px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: #101621;
+    box-shadow: 0 -8px 26px #0004;
+  }
+  .mobile-nav button {
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 4px;
+    min-width: 0;
+    min-height: 52px;
+    padding: 3px 1px;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    color: #aebacc;
+    font-size: 11px;
+    font-weight: 650;
+  }
+  .mobile-nav svg { width: 21px; height: 21px; }
+  .mobile-nav button.active { color: #ffc080; background: #ff922b16; }
+  .navigation-sheet {
+    width: min(100%, 560px);
+    max-height: calc(100dvh - env(safe-area-inset-top) - 16px);
+    margin: auto auto 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 20px 20px 0 0;
+  }
+  #toast { bottom: calc(var(--bottom-nav-height) + env(safe-area-inset-bottom) + 10px); }
+}

@@ -19,7 +19,7 @@ async function application(t, catalogueResponse = () => undefined) {
   };
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, { innerHTML: '', value: '', open: false, classList: { add() {}, remove() {} },
-      addEventListener() {}, setAttribute() {}, showModal() { this.open = true; }, close() { this.open = false; } });
+      addEventListener() {}, setAttribute() {}, focus() {}, showModal() { this.open = true; }, close() { this.open = false; } });
     return nodes.get(selector);
   };
   const location = { hash: '#catalog' };
@@ -230,4 +230,22 @@ test('an older catalogue response is ignored while a new search waits for its pa
   assert.match(node('#catalog-results').innerHTML, /Results for “Pika”/);
   tick(300);
   assert.equal(requests.filter(url => url.includes('name=Pika')).length, 1);
+});
+
+test('mobile navigation reaches secondary sections from its menu', async t => {
+  const { handlers, node } = await application(t);
+  const shell = node('#app').innerHTML;
+  assert.match(shell, /aria-label="Mobile navigation"/);
+  assert.match(shell, /data-page="catalog" class="active" aria-current="page"/);
+  assert.doesNotMatch(shell, /class="avatar"|class="profile"/);
+
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { action: 'more-navigation' } }) } });
+  assert.equal(node('#modal').open, true);
+  assert.match(node('#modal').innerHTML, /data-page="settings".*Data & backups/);
+  await handlers.get('click')({
+    preventDefault() {},
+    target: { closest: () => ({ dataset: { page: 'settings' }, closest: selector => selector === '.more-pages' }) },
+  });
+  assert.equal(node('#modal').open, false);
+  assert.match(node('#app').innerHTML, /<h1>Your collection\. Your data\.<\/h1>/);
 });
