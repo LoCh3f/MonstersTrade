@@ -61,7 +61,7 @@ function requireStaticSecurity(response, path) {
     "default-src 'none'", "script-src 'self'", "script-src-attr 'none'",
     "style-src 'self' https://fonts.googleapis.com", "style-src-attr 'unsafe-inline'",
     'font-src https://fonts.gstatic.com', "img-src 'self' https:",
-    "connect-src 'self' https://api.tcgdex.net", "worker-src 'self'",
+    "connect-src 'self' https://api.tcgdex.net", "worker-src 'self'", "manifest-src 'self'",
     "base-uri 'none'", "form-action 'none'", "frame-ancestors 'none'", "object-src 'none'",
   ]) assert.ok(directives.has(directive), `${path} is missing CSP directive ${directive}`);
   for (const [header, value] of [
@@ -103,6 +103,9 @@ try {
   for (const [path, type] of [
     ['/app.js', /javascript/], ['/import-worker.js', /javascript/], ['/styles.css', /text\/css/],
     ['/assets/monstertrade-logo.jpg', /image\/jpeg/], ['/featured.json', /application\/json/],
+    ['/manifest.webmanifest', /application\/(?:manifest\+)?json/], ['/sw.js', /javascript/],
+    ['/assets/icon-192.png', /image\/png/], ['/assets/icon-512.png', /image\/png/],
+    ['/assets/icon-maskable-512.png', /image\/png/], ['/assets/apple-touch-icon.png', /image\/png/],
   ]) {
     const response = await request(path);
     assert.equal(response.status, 200, `${path} is missing from the static bundle`);
