@@ -257,6 +257,32 @@ test('Italian Trainer and Tag Team titles search the selected printed names', as
   ]);
 });
 
+test('partial Asian searches combine matching species and translate Trainer names', async t => {
+  const { searchCards } = await freshCatalog();
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async url => {
+    const request = new URL(url);
+    requests.push(request);
+    if (request.pathname === '/v2/ja/sets') return response([{ id: 'SV2a', name: 'ポケモンカード151' }]);
+    return response([]);
+  });
+  await searchCards('Char 151', 'ja', 2);
+  const japanese = requests[1].searchParams;
+  assert.equal(japanese.get('set.id'), 'eq:SV2a');
+  assert.equal(japanese.get('pagination:page'), '2');
+  assert.match(japanese.get('name'), /^like:/);
+  const names = japanese.get('name').slice(5).split('|');
+  assert.ok(names.includes('ヒトカゲ'));
+  assert.ok(names.includes('リザードン'));
+
+  await searchCards('Contracch', 'ko');
+  assert.equal(requests[2].pathname, '/v2/ko/cards');
+  assert.equal(requests[2].searchParams.get('name'), '카운터 캐처');
+
+  await searchCards('Rara', 'ja');
+  assert.equal(requests[3].searchParams.get('name'), 'ふしぎなアメ');
+});
+
 test('network and provider failures have actionable messages and can be retried', async t => {
   const { getCard } = await freshCatalog();
   let status = 404;

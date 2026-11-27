@@ -161,6 +161,12 @@ export async function searchCards(query, lang = 'en', page = 1) {
     if (!set) return [];
     filters['set.id'] = `eq:${set.id}`;
   }
+  if (pokemon.nativeNames) {
+    const exactEx = (lang === 'ja' || lang === 'ko') && pokemon.suffix.toUpperCase() === 'EX';
+    const names = pokemon.nativeNames.map(nativeName => printedSearchName({ nativeName, suffix: pokemon.suffix }, lang));
+    if (pokemon.suffix && lang !== 'ja' && lang !== 'ko') filters.suffix = `eq:${pokemon.suffix.toUpperCase()}`;
+    return cardList({ ...filters, name: `${exactEx ? 'eq:' : 'like:'}${names.join('|')}` }, lang, pageNumber);
+  }
   const printedName = printedSearchName(pokemon, lang);
   if (!pokemon.id) return cardList({ ...filters, name: printedName }, lang, pageNumber);
   const suffix = pokemon.suffix.toUpperCase();

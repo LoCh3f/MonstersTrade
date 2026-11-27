@@ -61,6 +61,27 @@ function findSpecies(name) {
   return matches.size === 1 ? matches.values().next().value : null;
 }
 
+function partialCatalogueNames(input, lang) {
+  const key = nameKey(input);
+  const column = nativeColumns[lang];
+  if (!column || key.length < 2 || !/^[\p{Script=Latin}\d♀♂]+$/u.test(key)) return [];
+  latinNames();
+  const matches = new Set();
+  const matchesName = name => key.length === 2 ? name.startsWith(key) : name.includes(key);
+  const cardColumn = cardNameColumns[lang];
+  if (cardColumn) {
+    for (const names of localizedCardNames) {
+      if (names.slice(0, 2).some(name => matchesName(nameKey(name)))) matches.add(names[cardColumn]);
+    }
+  }
+  for (const [name, id] of westernNames) {
+    const printed = speciesNames[id][column];
+    if (printed && matchesName(name)) matches.add(printed);
+    if (matches.size >= 16) break;
+  }
+  return [...matches];
+}
+
 export function catalogueQuery(term, lang) {
   const match = term.match(/^(.+?)\s+(?:in\s+)?(giappones[ei]|[ck]orean[aeio]|japanese|korean)$/i);
   if (!match) return { term, lang };
@@ -101,10 +122,15 @@ export function catalogueAlias(term, lang) {
     return { id, name: names[0], nativeName: names[column] || '', suffix, setCode };
   }
   const partners = title.split(/\s+e\s+|\s*&\s*/i);
-  if (!cardColumn || partners.length !== 2) return null;
-  const names = partners.map(partner => speciesNames[findSpecies(partner)]);
-  if (names.some(row => !row?.[column])) return null;
-  return { name: names.map(row => row[0]).join(' & '), nativeName: names.map(row => row[column]).join('&'), suffix, setCode };
+  if (cardColumn && partners.length === 2) {
+    const names = partners.map(partner => speciesNames[findSpecies(partner)]);
+    if (names.every(row => row?.[column])) {
+      return { name: names.map(row => row[0]).join(' & '), nativeName: names.map(row => row[column]).join('&'), suffix, setCode };
+    }
+  }
+  const nativeNames = partialCatalogueNames(title, lang);
+  if (nativeNames.length === 1) return { nativeName: nativeNames[0], suffix, setCode };
+  return nativeNames.length ? { nativeNames, suffix, setCode } : null;
 }
 
 export function printedSearchName(pokemon, lang) {
