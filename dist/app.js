@@ -169,7 +169,7 @@ function render() {
         <div class="top-actions">
           <button class="global-search" data-action="focus-search" aria-label="Search the card catalogue">${icon('search')}<span>Search any card…</span><kbd>/</kbd></button>
           <span class="local-status">${icon(storageWarning?'info':'shield')}${storageWarning?'Backup recommended':'Saved on this device'}</span>
-          <button type="button" class="button subtle small-button install-app" data-action="install-app" aria-label="Install Monstertrade" ${isInstalled()?'hidden':''}>${icon('download')}Install</button>
+          <button type="button" class="button subtle small-button install-app" data-action="install-app" aria-label="Install Monstertrade" ${isInstalled()?'hidden':''}>${icon('download')}<span>Install</span></button>
         </div>
       </header>
       <main id="main" class="main" tabindex="-1">
