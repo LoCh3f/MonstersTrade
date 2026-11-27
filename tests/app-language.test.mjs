@@ -32,7 +32,8 @@ async function application(t, catalogueResponse = () => undefined) {
       const path = String(url); requests.push(path);
       const cards = [{ id: 'base1-4', name: 'Synthetic card', localId: '4' }];
       const value = path === '/api/health' ? { configured: false } : path === './featured.json' ? []
-        : (await catalogueResponse(path)) ?? (path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards);
+        : (await catalogueResponse(path)) ?? (path.startsWith('./catalogues/') ? {sets:[],cards:[]}
+          : path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards);
       return value instanceof Response ? value : Response.json(value);
     },
     setTimeout: (callback, delay) => {
@@ -186,7 +187,7 @@ test('a name searches across languages by default and the filter keeps the same 
     if (path.includes('/it/cards?')) return [{id:'sv4-1',name:'Manoferrea-ex',localId:'1'}];
     if (path.includes('/ja/cards?')) return [{id:'SV4M-027',name:'テツノカイナex',localId:'027'}];
     if (path.includes('/ko/cards?')) return [{id:'SV4M-027',name:'무쇠손 ex',localId:'027'}];
-    if (path.includes('/th/cards?')) return new Response(null, {status: 503});
+    if (path.includes('/id/cards?')) return new Response(null, {status: 503});
     if (path.includes('/cards?')) return [];
   });
   assert.match(node('#app').innerHTML, /<option value="all" selected>All languages/);
@@ -199,11 +200,11 @@ test('a name searches across languages by default and the filter keeps the same 
   const results = () => node('#catalog-results').innerHTML;
   assert.match(results(), /Results for “Manoferrea-ex” · All languages/);
   for (const language of ['English', 'Italian', 'Japanese', 'Korean']) assert.match(results(), new RegExp(`· ${language}"`));
-  assert.match(results(), /Couldn’t search Thai/);
+  assert.match(results(), /Couldn’t search Indonesian/);
+  assert.match(results(), /data-printing-language="ko">Korean/);
   assert.ok(requests.some(url => url.includes('/en/cards?name=Iron+Hands+ex')));
 
-  handlers.get('change')({ target: { id: 'catalog-lang', value: 'ko' } });
-  await new Promise(setImmediate);
+  await handlers.get('click')({target:{closest:()=>({dataset:{printingLanguage:'ko'}})}});
   assert.deepEqual(app.testState(), { lang: 'ko', query: 'Manoferrea-ex' });
   assert.match(results(), /· Korean"/);
   assert.doesNotMatch(results(), /· (English|Italian|Japanese)"/);
