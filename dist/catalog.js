@@ -1,6 +1,6 @@
 /** TCGdex public catalogue. Market estimates are Cardmarket trends in EUR. */
 import { providerMarketComparison } from './pricing.js';
-import { CATALOGUE_LANGUAGES } from './languages.js';
+import { CATALOGUE_LANGUAGES, SEARCH_LANGUAGES } from './languages.js';
 import { catalogueAlias, pokemonNameForIds, printedSearchName, westernSearchTitle } from './pokemon-search.js';
 import { getRegionalCard, getRegionalSet, hasRegionalCatalogue, isRegionalIdentity, searchRegionalCards } from './regional-catalogue.js';
 
@@ -10,7 +10,7 @@ const CACHE_LIMIT = 180;
 const cache = new Map();
 const pending = new Map();
 export const CATALOGUE_PAGE_SIZE = 24;
-const PRINTINGS_PER_LANGUAGE = Math.floor(CATALOGUE_PAGE_SIZE / CATALOGUE_LANGUAGES.length);
+const PRINTINGS_PER_LANGUAGE = 8;
 const catalogueId = /^[a-z0-9.+]+(?:-[a-z0-9.+]+)*-\d+[a-z]?$/i;
 class CatalogueNotFound extends Error {}
 
@@ -148,9 +148,16 @@ async function cardList(filters, lang, page, pageSize, pokemonName = '') {
     const localId = String(card.localId ?? '');
     return {
       id: card.id, name: card.name, pokemonName, localId, image: imageBase(card.image), lang,
-      setId: localId && card.id.endsWith(`-${localId}`) ? card.id.slice(0, -localId.length - 1) : '',
+      setId: listSetId(card.id, localId),
     };
   });
+}
+
+function listSetId(id, localId) {
+  const split = id.lastIndexOf('-');
+  if (split < 1 || !localId) return '';
+  const number = value => value.toLowerCase().replace(/^0+(?=\d)/, '');
+  return number(id.slice(split + 1)) === number(localId) ? id.slice(0, split) : '';
 }
 
 export async function searchCards(query, lang = 'en', page = 1, pageSize = CATALOGUE_PAGE_SIZE) {
@@ -222,7 +229,7 @@ async function searchTCGdex(term, lang, pageNumber, pageSize) {
 export async function searchCardPrintings(query, page, onFirstResults) {
   const term = String(query ?? '').trim().slice(0, 100);
   const exact = catalogueId.test(term);
-  const batches = CATALOGUE_LANGUAGES.map(({code}) => ({ code, cards: [] }));
+  const batches = (exact ? CATALOGUE_LANGUAGES : SEARCH_LANGUAGES).map(({code}) => ({ code, cards: [] }));
   let previewShown = false;
   await Promise.all(batches.map(async batch => {
     try {
@@ -259,6 +266,15 @@ export async function getCard(id, lang = 'en', force = false) {
   if (isRegionalIdentity(id, lang)) return getRegionalCard(cardId(id), lang);
   const data = await request(`${language(lang)}/cards/${encodeURIComponent(cardId(id))}`, { force });
   return normalizeCard(data, lang);
+}
+
+export async function findCardPrintings(id, lang) {
+  try {
+    return await searchCards(id, lang);
+  } catch (error) {
+    if (error instanceof CatalogueNotFound) return [];
+    throw error;
+  }
 }
 
 export async function getSet(id, lang = 'en') {

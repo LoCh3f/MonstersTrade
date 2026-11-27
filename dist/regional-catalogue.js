@@ -4,6 +4,13 @@ const supportedLanguages = new Set(['ko', 'zh-cn', 'zh-tw', 'th', 'id']);
 const catalogues = new Map();
 const key = value => value.normalize('NFC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 const regId = (lang, setSlug) => `cc-${lang}-${setSlug}`;
+const printedSetCode = value => value.split(' ')[0].toLowerCase();
+const printingPosition = (code, localId) => `${code}:${String(localId).toLowerCase().replace(/^0+(?=\d)/, '')}`;
+function editionCode(slug, code, lang) {
+  // The Korean and Traditional Chinese Base Set share the 102-card numbering.
+  if (slug === 'base-set' && (lang === 'ko' || lang === 'zh-tw')) return slug;
+  return printedSetCode(code);
+}
 
 export function hasRegionalCatalogue(lang) {
   return supportedLanguages.has(lang);
@@ -21,7 +28,20 @@ async function regionalCatalogue(lang) {
       if (!response.ok) throw new Error('The supplementary catalogue could not be loaded.');
       const { sets, cards } = await response.json();
       if (!Array.isArray(sets) || !Array.isArray(cards)) throw new Error('The supplementary catalogue could not be read.');
-      return { sets, cards, byCardId: new Map(cards.map(row => [`${regId(lang, sets[row[0]][0])}-${row[1]}`, row])) };
+      const setCodes = new Map();
+      for (const [slug, code] of sets) {
+        const key = editionCode(slug, code, lang);
+        if (key) setCodes.set(key, (setCodes.get(key) || 0) + 1);
+      }
+      const positions = new Map(), byCardId = new Map();
+      for (const row of cards) {
+        const [index, id, localId] = row;
+        const [slug, code] = sets[index];
+        byCardId.set(`${regId(lang, slug)}-${id}`, row);
+        const key = printingPosition(editionCode(slug, code, lang), localId);
+        positions.set(key, (positions.get(key) || 0) + 1);
+      }
+      return { sets, cards, byCardId, setCodes, positions };
     })().catch(error => {
       catalogues.delete(lang);
       throw error;
@@ -35,8 +55,11 @@ function cardFromRow(row, catalogue, lang) {
   const [setIndex, id, localId, name, englishName, picture, rarity] = row;
   const [slug, setCode, setName, setTotal] = catalogue.sets[setIndex];
   const setId = regId(lang, slug);
+  const code = editionCode(slug, setCode, lang);
+  const uniquePosition = catalogue.setCodes.get(code) === 1 && catalogue.positions.get(printingPosition(code, localId)) === 1;
   return {
     id: `${setId}-${id}`, name, pokemonName: englishName, localId: String(localId), setId, setName, setCode,
+    editionSetCode: uniquePosition ? code : '',
     setTotal: Number.isInteger(setTotal) && setTotal > 0 ? setTotal : null, rarity: rarity || 'Unspecified', lang,
     image: picture ? `https://img.cardcorpus.com/s1/480/${picture}.avif` : '',
     variantOptions: [],
@@ -63,9 +86,13 @@ export async function searchRegionalCards(term, lang, page, pageSize, exactId) {
   for (const row of catalogue.cards) {
     const [setIndex, id, localId, name, englishName] = row;
     const [slug, printedCode, setName] = catalogue.sets[setIndex];
-    const code = printedCode.toLowerCase().split(' ')[0];
+    const code = printedSetCode(printedCode);
     if (exactId) {
-      if ([code, slug].filter(Boolean).some(set => idTerm === `${set}-${String(localId).toLowerCase()}` || idTerm === `${set}-${id.toLowerCase()}`)) exact.push(row);
+      if ([code, slug].filter(Boolean).some(set => {
+        if (!idTerm.startsWith(`${set}-`)) return false;
+        const number = idTerm.slice(set.length + 1);
+        return number === id.toLowerCase() || printingPosition(set, number) === printingPosition(set, localId);
+      })) exact.push(row);
       continue;
     }
     if (setCode && setCode !== code && setCode !== slug && !(setCode === '151' && setName.includes('151'))) continue;
