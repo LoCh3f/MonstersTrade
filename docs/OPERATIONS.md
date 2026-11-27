@@ -2,6 +2,8 @@
 
 Collections and personal valuations stay in browser storage. Cloudflare holds only public prices and refresh metadata. A database restore does not recover a user's browser collection; users should keep JSON exports.
 
+CardTrader offers for the reviewed catalogue are enabled by the `CARDTRADER_MARKET_TOKEN` Worker secret. Use credentials approved for publishing market prices. Provision the secret in staging first and verify the four product mappings and Italian and English responses before enabling production. The public endpoint serves condition-level prices after filtering marketplace records. D1 only stores those aggregate observations, with a 24-hour fetch interval per product and language and a 15-minute retry interval on provider failure. [CardTrader market API access](https://static.cardtrader.com/en/pages/terms-of-service.html) · [Workers secrets](https://developers.cloudflare.com/workers/configuration/secrets/)
+
 ## Request limits and capacity
 
 Production and staging have independent rate-limit namespaces. The general allowance is 120 requests per minute so one normal collection refresh of at most 100 items fits with navigation requests. New or retryable unconfirmed card lookups have a separate 10-per-minute limit. Requests beyond a limit receive HTTP 429 with `Retry-After`; clients retain previous prices.
