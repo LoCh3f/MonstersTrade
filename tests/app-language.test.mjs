@@ -60,25 +60,26 @@ async function application(t, catalogueResponse = () => undefined) {
   return { app, handlers, node, stored, requests, tick };
 }
 
-test('catalogue language DOM input is canonical before rendering or requesting data', async t => {
+test('set catalogue language DOM input is canonical before rendering or requesting data', async t => {
   const { app, handlers, node, stored, requests } = await application(t);
   const payload = '<img src=x onerror=alert(1)>';
-  node('#catalog-query').value = 'Synthetic';
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { action: 'browse-catalogue-sets' } }) } });
+  assert.match(node('#app').innerHTML, /aria-label="Set language"/);
   const select = { id: 'catalog-lang', value: payload };
   handlers.get('change')({ target: select });
   await new Promise(setImmediate);
   assert.equal(app.testState().lang, 'en');
   assert.equal(select.value, 'en');
   assert.equal(stored.get('pocketvault.lang'), 'en');
-  assert.ok(requests.some(url => url.startsWith('https://api.tcgdex.net/v2/en/cards?')));
-  assert.ok(node('#catalog-results').innerHTML.includes(' · EN'));
+  assert.ok(requests.includes('https://api.tcgdex.net/v2/en/sets'));
+  assert.ok(node('#catalog-results').innerHTML.includes(' · English'));
   assert.equal(node('#catalog-results').innerHTML.includes(payload.toUpperCase()), false);
 
   select.value = 'it'; handlers.get('change')({ target: select });
   await new Promise(setImmediate);
   assert.equal(app.testState().lang, 'it');
   assert.equal(stored.get('pocketvault.lang'), 'it');
-  assert.ok(node('#catalog-results').innerHTML.includes(' · IT'));
+  assert.ok(node('#catalog-results').innerHTML.includes(' · Italian'));
 
   await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'base1', lang: payload } }) } });
   assert.equal(app.testState().lang, 'en');
@@ -101,30 +102,28 @@ test('both catalogue HTML sinks encode the language label even if state is corru
   }
 });
 
-test('choosing Japanese keeps name search in view and opens the selected printing by its number', async t => {
+test('a Japanese search qualifier opens the exact edition and its language choice', async t => {
   const charizard = { id: 'SV2a-201', name: 'リザードンex', localId: '201' };
   const set = { id: 'SV2a', name: 'ポケモンカード151', cardCount: { total: 210 } };
   const { app, handlers, node, requests } = await application(t, path => {
     if (path.endsWith('/ja/sets')) return [set];
     if (path.endsWith('/ja/cards/SV2a-201')) return { ...charizard, dexId: [6], set, rarity: 'Special Art Rare' };
+    if (path.includes('/cards/')) return new Response(null, {status:404});
     if (path.includes('/ja/cards?')) return [{ ...charizard, id: 'SV2a-006', localId: '006' }, charizard];
   });
-  handlers.get('change')({ target: { id: 'catalog-lang', value: 'ja' } });
-  assert.equal(app.testState().lang, 'ja');
-  assert.match(node('#app').innerHTML, /Printing language/);
-  assert.match(node('#app').innerHTML, /Find Japanese printings/);
-  assert.equal(requests.some(url => url.includes('/ja/sets')), false);
-
-  node('#catalog-query').value = 'Charizard ex 151';
+  assert.doesNotMatch(node('#app').innerHTML, /id="catalog-lang"/);
+  node('#catalog-query').value = 'Charizard ex 151 in giapponese';
   handlers.get('submit')({ target: { id: 'catalog-form' }, preventDefault() {} });
   await new Promise(setImmediate);
   const results = node('#catalog-results').innerHTML;
-  assert.match(results, /aria-label="View Charizard ex · SV2a · #006 · Japanese"/);
-  assert.match(results, /aria-label="View Charizard ex · SV2a · #201 · Japanese"/);
-  assert.match(results, /lang="ja">リザードンex/);
-  assert.match(results, /Pokémon Card 151/);
+  assert.equal(app.testState().lang, 'ja');
+  assert.match(results, /aria-label="View Charizard ex · OCG · Asian · Pokémon Card 151 · #006"/);
+  assert.match(results, /aria-label="View Charizard ex · OCG · Asian · Pokémon Card 151 · #201"/);
 
-  await handlers.get('click')({ target: { closest: () => ({ dataset: { card: 'SV2a-201', lang: 'ja' } }) } });
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { edition: 'ocg:sv2a:201' } }) } });
+  assert.match(node('#modal').innerHTML, /Choose a printing language/);
+  assert.match(node('#modal').innerHTML, /lang="ja">リザードンex/);
+  await handlers.get('click')({ target: { closest: () => ({ dataset: { editionLanguage: 'ja' } }) } });
   const details = node('#modal').innerHTML;
   assert.match(details, /id="modal-title">Charizard ex</);
   assert.match(details, /#201 · Japanese/);
@@ -140,7 +139,7 @@ test('set browsing shows identifying codes when a Japanese title has no translat
     if (path.endsWith('/ja/sets/SV7a')) return { ...set, cards: [card] };
   });
   handlers.get('change')({ target: { id: 'catalog-lang', value: 'ja' } });
-  await handlers.get('click')({ target: { closest: () => ({ dataset: { action: 'browse-catalogue-sets' } }) } });
+  await new Promise(setImmediate);
   assert.match(node('#catalog-results').innerHTML, /<h3>Set SV7a<\/h3><p lang="ja">楽園ドラゴーナ/);
 
   await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'SV7a', lang: 'ja' } }) } });
@@ -181,16 +180,18 @@ test('an Italian printing-language qualifier selects Korean and links to the off
   assert.equal(app.testState().lang, 'all');
 });
 
-test('a name searches across languages by default and the filter keeps the same query', async t => {
+test('a name groups TCG and OCG printings and offers Spanish only in the edition dialog', async t => {
   const { app, handlers, node, requests, tick } = await application(t, path => {
     if (path.includes('/en/cards?')) return [{id:'sv4-1',name:'Iron Hands ex',localId:'1'}];
     if (path.includes('/it/cards?')) return [{id:'sv4-1',name:'Manoferrea-ex',localId:'1'}];
     if (path.includes('/ja/cards?')) return [{id:'SV4M-027',name:'テツノカイナex',localId:'027'}];
     if (path.includes('/ko/cards?')) return [{id:'SV4M-027',name:'무쇠손 ex',localId:'027'}];
     if (path.includes('/id/cards?')) return new Response(null, {status: 503});
+    if (path.endsWith('/es/cards/sv4-1')) return {id:'sv4-1', name:'Iron Hands ex', localId:'1', set:{id:'sv4',name:'Brecha Paradójica'}};
+    if (path.includes('/cards/')) return new Response(null, {status:404});
     if (path.includes('/cards?')) return [];
   });
-  assert.match(node('#app').innerHTML, /<option value="all" selected>All languages/);
+  assert.doesNotMatch(node('#app').innerHTML, /id="catalog-lang"/);
   const input = node('#catalog-query');
   input.id = 'catalog-query';
   input.value = 'Manoferrea-ex';
@@ -198,29 +199,36 @@ test('a name searches across languages by default and the filter keeps the same 
   tick(300);
   await new Promise(setImmediate);
   const results = () => node('#catalog-results').innerHTML;
-  assert.match(results(), /Results for “Manoferrea-ex” · All languages/);
-  for (const language of ['English', 'Italian', 'Japanese', 'Korean']) assert.match(results(), new RegExp(`· ${language}"`));
+  assert.match(results(), /Results for “Manoferrea-ex”/);
+  assert.deepEqual([...results().matchAll(/data-edition="([^"]+)"/g)].map(match=>match[1]), ['tcg:sv4-1','ocg:sv4m:27']);
   assert.match(results(), /Couldn’t search Indonesian/);
-  assert.match(results(), /data-printing-language="ko">Korean/);
+  assert.doesNotMatch(results(), /Choose a printing language/);
   assert.ok(requests.some(url => url.includes('/en/cards?name=Iron+Hands+ex')));
 
-  await handlers.get('click')({target:{closest:()=>({dataset:{printingLanguage:'ko'}})}});
-  assert.deepEqual(app.testState(), { lang: 'ko', query: 'Manoferrea-ex' });
-  assert.match(results(), /· Korean"/);
-  assert.doesNotMatch(results(), /· (English|Italian|Japanese)"/);
+  const click = dataset => handlers.get('click')({target:{closest:()=>({dataset})}});
+  await click({edition:'tcg:sv4-1'});
+  assert.match(node('#modal').innerHTML, /Choose a printing language/);
+  for (const code of ['en','it','es']) assert.match(node('#modal').innerHTML, new RegExp(`data-edition-language="${code}"`));
+  assert.doesNotMatch(node('#modal').innerHTML, /data-edition-language="ko"/);
+  await click({editionLanguage:'es'});
+  assert.match(node('#modal').innerHTML, /#1 · Spanish/);
+  await click({action:'close-modal'});
+  await click({edition:'ocg:sv4m:27'});
+  assert.match(node('#modal').innerHTML, /data-edition-language="ko"/);
+  assert.doesNotMatch(node('#modal').innerHTML, /data-edition-language="(en|es)"/);
+  assert.deepEqual(app.testState(), { lang: 'all', query: 'Manoferrea-ex' });
   assert.equal(input.value, 'Manoferrea-ex');
 });
 
 test('catalogue typing debounces requests, waits for a composed name, and clears results immediately', async t => {
   const { app, handlers, node, requests, tick } = await application(t);
-  handlers.get('change')({ target: { id: 'catalog-lang', value: 'en' } });
   const input = node('#catalog-query');
   input.id = 'catalog-query';
   const type = (value, isComposing = false) => {
     input.value = value;
     handlers.get('input')({ target: input, isComposing });
   };
-  const searches = () => requests.filter(url => url.includes('/cards?'));
+  const searches = () => requests.filter(url => url.includes('/en/cards?'));
 
   type('P');
   assert.match(node('#catalog-results').innerHTML, /Keep typing/);
@@ -247,12 +255,33 @@ test('catalogue typing debounces requests, waits for a composed name, and clears
   assert.doesNotMatch(node('#catalog-results').innerHTML, /Results for “ピカチュウ”/);
 });
 
+test('loading more editions merges printings that arrive on different language pages', async t => {
+  const {handlers,node}=await application(t,path=>{
+    if(!path.includes('/cards?'))return;
+    const url=new URL(path), language=url.pathname.split('/')[2];
+    const offset=url.searchParams.get('pagination:page')==='1'?0:8;
+    if(language==='en'&&offset===0)return Array.from({length:8},(_,i)=>({id:`set-${i+1}`,name:'Blastoise',localId:i+1}));
+    if(language==='it'&&offset===0)return Array.from({length:8},(_,i)=>({id:`set-${i+8}`,name:'Blastoise',localId:i+8}));
+    if(language==='en'&&offset===8)return [{id:'set-9',name:'Blastoise',localId:9},{id:'set-16',name:'Blastoise',localId:16}];
+    return [];
+  });
+  node('#catalog-query').value='Blastoise';
+  handlers.get('submit')({target:{id:'catalog-form'},preventDefault(){}});
+  await new Promise(setImmediate);
+  const keys=()=>[...node('#catalog-results').innerHTML.matchAll(/data-edition="([^"]+)"/g)].map(match=>match[1]);
+  assert.equal(keys().length,15);
+  await handlers.get('click')({target:{closest:()=>({dataset:{action:'more-editions'}})}});
+  const loaded=keys();
+  assert.equal(loaded.length,16);
+  assert.equal(loaded.length,new Set(loaded).size);
+  assert.ok(loaded.includes('tcg:set-1')&&loaded.includes('tcg:set-16'));
+});
+
 test('an older catalogue response is ignored while a new search waits for its pause', async t => {
   const earlier = Promise.withResolvers();
   const { handlers, node, requests, tick } = await application(t, url => {
-    if (new URL(url).searchParams.get('name') === 'Char') return earlier.promise;
+    if (url.includes('/en/cards?')&&new URL(url).searchParams.get('name') === 'Char') return earlier.promise;
   });
-  handlers.get('change')({ target: { id: 'catalog-lang', value: 'en' } });
   const input = node('#catalog-query');
   input.id = 'catalog-query';
   input.value = 'Char';
@@ -269,7 +298,7 @@ test('an older catalogue response is ignored while a new search waits for its pa
   await new Promise(setImmediate);
   assert.match(node('#catalog-results').innerHTML, /Results for “Pika”/);
   tick(300);
-  assert.equal(requests.filter(url => url.includes('name=Pika')).length, 1);
+  assert.equal(requests.filter(url => url.includes('/en/cards?name=Pika')).length, 1);
 });
 
 test('mobile navigation reaches secondary sections from its menu', async t => {

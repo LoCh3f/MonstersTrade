@@ -11,6 +11,7 @@ import { productImage, productPhotoSource, safePhotoURL } from './photos.js';
 import { isInstalled, promptInstallation, setupInstallation } from './install.js';
 import { cardOfferKey, cardOfferReference } from './card-offers.js';
 import { isRegionalIdentity } from './regional-catalogue.js';
+import { EDITION_LABELS, findEditionPrintings, groupCardEditions } from './catalogue-editions.js';
 
 const icons = {
   home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -56,7 +57,7 @@ const MIGRATION_BACKUP_KEY = 'pocketvault.before-v2';
 const pages = {dashboard:'Overview',collection:'My collection',wishlist:'Wishlist',binders:'Binders',sets:'Set progress',catalog:'Discover cards',sealed:'Sealed products',settings:'Data & backups'};
 const ALL_PRINTINGS = 'all';
 let state = emptyState(), storageWarning = '', recoveredRaw = '', migrationBackup = '', migrationPending = false;
-let lang = ALL_PRINTINGS, searchLanguage = ALL_PRINTINGS, catalogueSetsLanguage = 'en';
+let searchLanguage = ALL_PRINTINGS, catalogueSetsLanguage = 'en';
 try {
   const raw = localStorage.getItem(STORAGE_KEY);
   migrationBackup=localStorage.getItem(MIGRATION_BACKUP_KEY)||'';
@@ -76,7 +77,8 @@ try {
 let page = pages[location.hash.slice(1)] ? location.hash.slice(1) : 'dashboard';
 let featured = [], query = '', searchPage = 1, searchResults = [], searchError = '', searching = false, searchTicket = 0, setView = null;
 const CATALOGUE_SEARCH_DELAY = 300;
-let catalogueInput = '', catalogueSearchTimer, searchHasMore = false, searchUnavailable = [], finishingLanguages = false;
+let catalogueInput = '', catalogueSearchTimer, searchHasMore = false, searchUnavailable = [], loadingMoreEditions = false;
+let searchMoreError = '', englishSetNames = new Map();
 let lastSetRequest = null, listingSets = false, catalogueSets = [];
 let collectionQuery = '', binderFilter = 'all', kindFilter = 'all', languageFilter = '', setFilter = '', valuationFilter = '';
 let sort = 'recent', view = 'grid', range = '30', collectionPage = 1;
@@ -85,6 +87,7 @@ const COLLECTION_PAGE_SIZE = 48;
 let sealedQuery = '', sealedType = '', sealedPage = 1, sealedResult = null, sealedError = '', sealedLoading = false, sealedTicket = 0;
 let modalCard = null, modalEntry = null, modalWish = null, modalMode = 'collect', modalTicket = 0;
 let modalBundle = null, modalWarning = '', modalDraft = null, modalHistoryTicket = 0;
+let modalEdition = null;
 let refreshing = false, toastTimer, undoAction = null, pendingImport = null, lastAutoRefresh = 0, priceService = null;
 let activeImport = null;
 const app = document.querySelector('#app');
@@ -226,7 +229,7 @@ function chart() {
 }
 function cardTile(card, type = 'catalog') {
   if(card.kind==='sealed')return sealedTile(card,type==='collection');
-  const cardLanguage = card.lang || catalogueSetLanguage(lang);
+  const cardLanguage = card.lang || catalogueSetsLanguage;
   const attrs = type==='collection'?`data-entry="${esc(card.uid)}"`:`data-card="${esc(card.id)}" data-lang="${esc(cardLanguage)}"`;
   const isOwned = state.collection.some(c=>c.id===card.id&&c.lang===cardLanguage);
   const knownPrice = Object.hasOwn(card,'price');
@@ -369,18 +372,32 @@ function collectionResults() {
 }
 
 function catalogueViewLanguage() {
-  return lastSetRequest?.lang ?? (listingSets ? catalogueSetsLanguage : query ? searchLanguage : lang);
+  return lastSetRequest?.lang ?? (listingSets ? catalogueSetsLanguage : query ? searchLanguage : ALL_PRINTINGS);
 }
 function catalog() {
   const language=catalogueViewLanguage();
-  const selected=CATALOGUE_LANGUAGES.find(item=>item.code===language);
-  const asian=marketLanguage(language)!=='en';
-  const examples=language==='ja'?['Pikachu','Charizard ex 151','Caramella Rara']:language==='ko'?['Manoferrea-ex','Contracchiappa-Pokémon']:asian?[selected?.example||'Pikachu']:['Pikachu','Charizard','Eevee','Caramella Rara'];
+  const examples=['Blastoise','Charizard ex 151','Pikachu','Caramella Rara'];
   const setName=setView?catalogueSetName(setView.name,setView.id,language):'';
-  const subtitle='Search by name or card ID. You can filter the results by printing language.';
+  const subtitle='Find Western (TCG) and Asian (OCG) editions by name or card ID. Open an edition to choose its language.';
+  const setLanguage=listingSets||lastSetRequest
+    ? `<label class="printing-language" for="catalog-lang"><span>Set language</span><select id="catalog-lang" aria-label="Set language">${CATALOGUE_LANGUAGES.map(({code,label})=>`<option value="${code}" ${language===code?'selected':''}>${label}</option>`).join('')}${!CATALOGUE_LANGUAGES.some(item=>item.code===language)?`<option value="${esc(language)}" selected>${esc(languageLabel(language))}</option>`:''}</select></label>` : '';
   return `${heading(setView?esc(setName):'Discover cards',setView?`${esc(languageLabel(language))} · ${esc(setView.id)}${setName!==setView.name?` · ${esc(setView.name)}`:''}`:subtitle)}
-  <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" type="search" aria-label="Search cards by name or catalogue ID" aria-controls="catalog-results" placeholder="${esc(selected?.example||'Pikachu')} or a card ID…" value="${esc(catalogueInput)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group"><label class="printing-language" for="catalog-lang"><span>Printing language</span><select id="catalog-lang" aria-label="Printing language"><option value="all" ${language===ALL_PRINTINGS?'selected':''}>All languages</option>${CATALOGUE_LANGUAGES.map(({code,label})=>`<option value="${code}" ${language===code?'selected':''}>${label}</option>`).join('')}${!selected&&language!==ALL_PRINTINGS?`<option value="${esc(language)}" selected>${esc(languageLabel(language))}</option>`:''}</select></label><button class="button primary" type="submit">${icon('search')}Search</button></div></form>
-  <div class="chips" id="catalog-examples" ${catalogueInput.trim()?'hidden':''}><button class="chip ${listingSets?'active':''}" data-action="browse-catalogue-sets">Browse sets</button>${examples.map(name=>`<button class="chip" data-search="${esc(name)}">${esc(name)}</button>`).join('')}${setView||listingSets?'<button class="chip" data-action="clear-search">Clear</button>':''}</div><div id="catalog-results" aria-busy="${searching||finishingLanguages}">${catalogResults()}</div>`;
+  <form id="catalog-form" class="toolbar"><div class="search-field">${icon('search')}<input id="catalog-query" type="search" aria-label="Search cards by name or catalogue ID" aria-controls="catalog-results" placeholder="Blastoise or a card ID…" value="${esc(catalogueInput)}" autocomplete="off" maxlength="100"></div><div class="toolbar-group">${setLanguage}<button class="button primary" type="submit">${icon('search')}Search</button></div></form>
+  <div class="chips" id="catalog-examples" ${catalogueInput.trim()?'hidden':''}><button class="chip ${listingSets?'active':''}" data-action="browse-catalogue-sets">Browse sets</button>${examples.map(name=>`<button class="chip" data-search="${esc(name)}">${esc(name)}</button>`).join('')}${setView||listingSets?'<button class="chip" data-action="clear-search">Clear</button>':''}</div><div id="catalog-results" aria-busy="${searching||loadingMoreEditions}">${catalogResults()}</div>`;
+}
+function editionSetTitle(edition) {
+  const {card,setName,region}=edition;
+  if(setName)return catalogueSetName(setName,card.setId,card.lang);
+  if(region==='tcg')return englishSetNames.get(card.setId?.toLowerCase())||card.setId||'Pokémon TCG';
+  const code=card.setCode||card.setId;
+  return code?.toLowerCase()==='sv2a'?'Pokémon Card 151':code||'Pokémon OCG';
+}
+function editionTile(edition) {
+  const {card,region,key}=edition;
+  const title=catalogueCardTitle(card), set=editionSetTitle(edition), number=card.localId?`#${card.localId}`:'';
+  const label=[title,EDITION_LABELS[region],set,number].filter(Boolean).join(' · ');
+  const owned=[...edition.printings.values()].some(row=>state.collection.some(saved=>saved.id===row.id&&saved.lang===row.lang));
+  return `<article class="pokemon-card edition-card"><button class="card-open" data-edition="${esc(key)}" aria-label="View ${esc(label)}"><div class="card-art">${art(edition.art)}${owned?'<span class="card-badge">In your vault</span>':''}</div><div class="card-name">${esc(title)}</div><div class="card-set">${esc([set,number].filter(Boolean).join(' · '))}</div><div class="edition-card-footer"><span class="edition-region ${region}">${EDITION_LABELS[region]}</span>${icon('chevron')}</div></button></article>`;
 }
 function catalogResults() {
   if(searching) return skeletons();
@@ -392,34 +409,32 @@ function catalogResults() {
     return `<div class="result-note"><span>${num(catalogueSets.length)} sets · ${esc(languageLabel(language))}</span></div><div class="set-grid">${display.map(set=>`<button class="set-tile" data-set="${esc(set.id)}" data-lang="${esc(language)}"><div class="set-tile-top">${icon('sets')}<span class="set-code">${esc(set.id)}</span></div><h3>${esc(catalogueSetName(set.name,set.id,language))}</h3>${catalogueSetName(set.name,set.id,language)!==set.name?`<p lang="${esc(language)}">${esc(set.name)}</p>`:''}${Number.isInteger(set.cardCount?.total)?`<p>${num(set.cardCount.total)} cards in the catalogue</p>`:''}</button>`).join('')}</div>${cataloguePagination(searchPage*CATALOGUE_PAGE_SIZE>=catalogueSets.length)}`;
   }
   if(!query&&!setView&&catalogueInput.trim())return empty('search','Keep typing','Enter at least two characters to search as you type.','','');
-  const usingFeatured=!query&&!setView&&marketLanguage(language)==='en';
-  if(!usingFeatured&&!query&&!setView)return empty('search',`Find ${esc(languageLabel(language))} printings`,language==='ja'?'Try “Pikachu”, “Charizard ex 151”, or a card ID like “SV2a-201”.':'Enter a Pokémon name such as Pikachu or the card’s catalogue ID.','','');
+  const usingFeatured=!query&&!setView;
   const rows=usingFeatured?featured:searchResults;
   const availability=query&&searchUnavailable.length?`<p class="notice warning">Couldn’t search ${esc(searchUnavailable.map(languageLabel).join(', '))}. <button class="text-button" data-action="retry-search">Try again</button></p>`:'';
   if(!rows.length){
-    const pagination=searchPage>1?cataloguePagination(true):'';
     if(language==='ko'&&searchPage===1){
       const alias=catalogueAlias(query,language);
       const url=new URL('https://pokemoncard.co.kr/cards');
       if(alias?.nativeName)url.searchParams.set('s',printedSearchName(alias,language));
       return empty('search','No cards found',`<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">Search the official Pokémon Korea catalogue</a> for more printings.`,'','');
     }
-    return availability+empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets')+pagination;
+    return availability+empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets');
+  }
+  if(query){
+    const editions=groupCardEditions(rows,query);
+    const scope=language===ALL_PRINTINGS?'':` · ${esc(languageLabel(language))}`;
+    const loadMore=searchHasMore?`<div class="pagination"><button class="button subtle" data-action="more-editions" ${loadingMoreEditions?'disabled':''}>${loadingMoreEditions?'Loading editions…':searchMoreError?'Try again':'Load more editions'}</button></div>`:'';
+    return `${availability}<div class="result-note"><span>Results for “${esc(query)}”${scope}</span><span>${loadingMoreEditions?'<span role="status">Checking more editions…</span>':`${num(editions.length)} editions`}</span></div><div class="card-grid collection-grid">${editions.map(editionTile).join('')}</div>${searchMoreError?`<p class="notice warning">${esc(searchMoreError)}</p>`:''}${loadMore}`;
   }
   const display=setView?rows.slice((searchPage-1)*CATALOGUE_PAGE_SIZE,searchPage*CATALOGUE_PAGE_SIZE):rows;
-  const scope=language===ALL_PRINTINGS?'All languages':language.toUpperCase();
-  const availableLanguages=query&&language===ALL_PRINTINGS&&!finishingLanguages
-    ? [...new Set(display.map(card=>card.lang))] : [];
-  const languageLinks=availableLanguages.length
-    ? `<div class="chips catalogue-languages" role="group" aria-label="Printing languages in these results">${availableLanguages.map(code=>`<button class="chip" data-printing-language="${esc(code)}">${esc(languageLabel(code))}</button>`).join('')}</div>` : '';
-  return `${availability}<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,language))}`:`Results for “${esc(query)}” · ${esc(scope)}`}</span>${finishingLanguages?'<span role="status">Checking more languages…</span>':''}</div>${languageLinks}<div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${usingFeatured?'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>':finishingLanguages?'':cataloguePagination(setView?searchPage*CATALOGUE_PAGE_SIZE>=rows.length:!searchHasMore)}`;
+  return `<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,language))}`}</span></div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${usingFeatured?'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>':cataloguePagination(searchPage*CATALOGUE_PAGE_SIZE>=rows.length)}`;
 }
 function cataloguePagination(lastPage) {
   return `<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${lastPage?'disabled':''}>Next</button></div>`;
 }
 async function browseCatalogueSets() {
   const ticket=cancelCatalogueSearch();
-  if(lang!==ALL_PRINTINGS)catalogueSetsLanguage=lang;
   listingSets=true;setView=null;lastSetRequest=null;query='';catalogueInput='';searchPage=1;searching=true;searchError='';
   if(page==='catalog')render();
   try {
@@ -432,21 +447,21 @@ async function browseCatalogueSets() {
 function cancelCatalogueSearch() {
   clearTimeout(catalogueSearchTimer);
   catalogueSearchTimer=undefined;
-  finishingLanguages=false;
+  loadingMoreEditions=false;
   return ++searchTicket;
 }
 
-function searchCatalogue(value,{debounce=false,renderControls=false}={}) {
+function searchCatalogue(value,{debounce=false}={}) {
   catalogueInput=value;
   const input=document.querySelector('#catalog-query');
   if(input&&input.value!==value)input.value=value;
-  const search=catalogueQuery(value.trim(),lang);
+  const search=catalogueQuery(value.trim(),ALL_PRINTINGS);
   const autoSearch=debounce&&[...search.term].length>=2;
   const start=()=>{
     query=debounce&&!autoSearch?'':search.term;
     searchLanguage=search.lang;
     searchPage=1;
-    return runSearch(renderControls);
+    return runSearch();
   };
   if(!autoSearch)return start();
   cancelCatalogueSearch();
@@ -454,46 +469,54 @@ function searchCatalogue(value,{debounce=false,renderControls=false}={}) {
   if(!searching){searching=true;updateCatalog();}
 }
 
-async function runSearch(renderControls=false) {
+async function runSearch({append=false}={}) {
   const ticket=cancelCatalogueSearch();
   const leavingSet=Boolean(setView||lastSetRequest||listingSets);
   setView=null; lastSetRequest=null; listingSets=false; searchError='';
-  searchHasMore=false;searchUnavailable=[];
-  searching=Boolean(query);
-  if(!searching)searchResults=[];
-  if((renderControls||leavingSet)&&page==='catalog')render();
+  searchMoreError='';
+  const requestedPage=append?searchPage+1:1;
+  searching=Boolean(query)&&!append;
+  loadingMoreEditions=append;
+  if(!append){searchResults=[];searchHasMore=false;searchUnavailable=[];searchPage=1;}
+  if(leavingSet&&page==='catalog')render();
   else updateCatalog();
-  if(!searching)return;
-  try {
-    if(searchLanguage===ALL_PRINTINGS){
-      const result=await searchCardPrintings(query,searchPage,cards=>{
-        if(ticket!==searchTicket)return;
-        searchResults=cards;searching=false;finishingLanguages=true;updateCatalog();
-      });
-      if(ticket!==searchTicket)return;
-      searchResults=result.cards;searchHasMore=result.hasMore;searchUnavailable=result.unavailable;
-    }else{
-      const results=await searchCards(query,searchLanguage,searchPage);
-      if(ticket!==searchTicket)return;
-      searchResults=results;searchHasMore=results.length>=CATALOGUE_PAGE_SIZE;
-    }
+  if(!query)return;
+  if(!englishSetNames.size){
+    void getSets('en').then(sets=>{
+      englishSetNames=new Map(sets.filter(set=>typeof set?.id==='string'&&typeof set.name==='string').map(set=>[set.id.toLowerCase(),set.name]));
+      if(ticket===searchTicket&&!searching)updateCatalog();
+    }).catch(()=>{});
   }
-  catch(error){if(ticket!==searchTicket)return;searchError=error.message;}
-  finally{if(ticket===searchTicket){searching=false;finishingLanguages=false;updateCatalog();}}
+  try {
+    let rows, hasMore, unavailable=[];
+    if(searchLanguage===ALL_PRINTINGS){
+      const result=await searchCardPrintings(query,requestedPage,append?undefined:cards=>{
+        if(ticket!==searchTicket)return;
+        searchResults=cards;searching=false;loadingMoreEditions=true;updateCatalog();
+      });
+      ({cards:rows,hasMore,unavailable}=result);
+    }else{
+      rows=await searchCards(query,searchLanguage,requestedPage);
+      hasMore=rows.length>=CATALOGUE_PAGE_SIZE;
+    }
+    if(ticket!==searchTicket)return;
+    searchResults=append?[...searchResults,...rows]:rows;
+    searchHasMore=hasMore;searchUnavailable=append?[...new Set([...searchUnavailable,...unavailable])]:unavailable;searchPage=requestedPage;
+  }
+  catch(error){if(ticket!==searchTicket)return;if(append)searchMoreError=error.message;else searchError=error.message;}
+  finally{if(ticket===searchTicket){searching=false;loadingMoreEditions=false;updateCatalog();}}
 }
 function updateCatalog() {
   const container=document.querySelector('#catalog-results');
-  if(container){container.innerHTML=catalogResults();container.setAttribute('aria-busy',String(searching||finishingLanguages));}
+  if(container){container.innerHTML=catalogResults();container.setAttribute('aria-busy',String(searching||loadingMoreEditions));}
   const select=document.querySelector('#catalog-lang');
   if(select)select.value=catalogueViewLanguage();
   const examples=document.querySelector('#catalog-examples');
   if(examples)examples.hidden=Boolean(catalogueInput.trim());
 }
 function selectCatalogueLanguage(value) {
-  lang=value===ALL_PRINTINGS?ALL_PRINTINGS:catalogueLanguage(value);
-  if(lang===ALL_PRINTINGS)return;
-  catalogueSetsLanguage=lang;
-  try{localStorage.setItem('pocketvault.lang',lang);}catch{}
+  catalogueSetsLanguage=catalogueLanguage(value);
+  try{localStorage.setItem('pocketvault.lang',catalogueSetsLanguage);}catch{}
 }
 async function browseSet(id,language) {
   const ticket=cancelCatalogueSearch();
@@ -527,7 +550,7 @@ function modalShell(title,body,small=false) {
   modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${esc(title)}</h2><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon('close')}</button></div><div class="modal-body">${body}</div>`;
   if(!modal.open)modal.showModal();
 }
-function closeModal(){++modalTicket;++modalHistoryTicket;activeImport?.abort();activeImport=null;modal.close();modalCard=null;modalEntry=null;modalWish=null;modalBundle=null;modalDraft=null;modalWarning='';pendingImport=null;}
+function closeModal(){++modalTicket;++modalHistoryTicket;activeImport?.abort();activeImport=null;modal.close();modalCard=null;modalEntry=null;modalWish=null;modalBundle=null;modalDraft=null;modalWarning='';modalEdition=null;pendingImport=null;}
 function ensureMarket(card) {
   if(card.market)return card;
   const variants=(card.variants||card.variantOptions||[]).map(v=>({...v,quote:v.quote||normalizeQuote({amount:null,currency:'EUR',mapping:'unverified'})}));
@@ -537,10 +560,33 @@ function priceFailure(card,message) {
   const prepared=ensureMarket(card);
   return {...prepared,market:{...prepared.market,lastAttemptAt:new Date().toISOString(),lastError:message}};
 }
-async function openCard(id,language=catalogueSetLanguage(lang),entry=null,wish=null) {
+function renderEditionPrintings({checking=false,unavailable=[]}={}) {
+  const edition=modalEdition;
+  const title=catalogueCardTitle(edition.card);
+  const description=[EDITION_LABELS[edition.region],editionSetTitle(edition),edition.card.localId?`#${edition.card.localId}`:''].filter(Boolean).join(' · ');
+  const languages=CATALOGUE_LANGUAGES.flatMap(({code,label})=>{
+    const card=edition.printings.get(code);
+    if(!card)return [];
+    const name=card.name!==title?`<span lang="${esc(code)}">${esc(card.name)}</span>`:'';
+    return `<button class="button subtle edition-language" data-edition-language="${esc(code)}" aria-label="${esc(label)}"><span><strong>${esc(label)}</strong>${name}</span>${icon('chevron')}</button>`;
+  }).join('');
+  const status=checking?'<p class="form-hint" role="status">Checking available languages…</p>':unavailable.length?`<p class="notice warning">Couldn’t check ${esc(unavailable.map(languageLabel).join(', '))}. <button class="text-button" data-action="edition-languages">Try again</button></p>`:'';
+  modalShell(title,`<p class="edition-description">${esc(description)}</p><h3 class="edition-language-heading">Choose a printing language</h3><div class="edition-language-list" role="group" aria-label="Printing languages">${languages}</div>${status}`,true);
+}
+async function openEdition(edition) {
+  const ticket=++modalTicket;++modalHistoryTicket;
+  modalCard=null;modalEntry=null;modalWish=null;modalBundle=null;modalDraft=null;
+  modalEdition=edition;
+  renderEditionPrintings({checking:Boolean(edition.lookup)});
+  const {printings,unavailable}=await findEditionPrintings(edition);
+  if(ticket!==modalTicket||!modal.open)return;
+  modalEdition={...edition,printings};
+  renderEditionPrintings({unavailable});
+}
+async function openCard(id,language='en',entry=null,wish=null,edition=null) {
   if(entry?.kind==='sealed'||wish?.kind==='sealed'){await openSealed(id,entry,wish);return;}
   const ticket=++modalTicket;++modalHistoryTicket;
-  modalCard=null;modalBundle=null;modalWarning='';modalDraft=null;modalEntry=entry;modalWish=wish;modalMode=wish?'wish':'collect';
+  modalCard=null;modalBundle=null;modalWarning='';modalDraft=null;modalEntry=entry;modalWish=wish;modalMode=wish?'wish':'collect';modalEdition=edition;
   modalShell('Card details','<div class="loading"><span class="spinner"></span>Loading card and price references…</div>');
   const regional=isRegionalIdentity(id,language);
   const [details,prices]=await Promise.allSettled([
@@ -550,7 +596,7 @@ async function openCard(id,language=catalogueSetLanguage(lang),entry=null,wish=n
   if(ticket!==modalTicket||!modal.open)return;
   if(details.status==='fulfilled'){
     const card=details.value;
-    const result=searchResults.find(row=>row.id===card.id&&row.lang===card.lang);
+    const result=edition?.printings.get(language)||searchResults.find(row=>row.id===card.id&&row.lang===card.lang);
     modalCard=ensureMarket({...card,pokemonName:card.pokemonName||result?.pokemonName});
   }
   else {
@@ -664,7 +710,8 @@ function renderCardModal() {
   const market=regional
     ? '<p class="notice">This regional printing can be saved with a personal valuation.</p>'
     : marketPanel({...c,condition:wishMode?'Near Mint':d.condition||c.condition},modalBundle);
-  modalShell(title,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(title)}"></a>`:icon('cards')}<p class="modal-card-meta">${title!==c.name?`<span lang="${esc(c.lang)}">${esc(c.name)}</span><br>`:''}${esc(catalogueSetName(c.setName,c.setId,c.lang))}${setCode&&marketLanguage(c.lang)!=='en'?` · ${esc(setCode)}`:''}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${market}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
+  const changeLanguage=modalEdition?'<button class="button subtle small-button edition-change" data-action="edition-languages">Change printing language</button>':'';
+  modalShell(title,`${changeLanguage}${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(title)}"></a>`:icon('cards')}<p class="modal-card-meta">${title!==c.name?`<span lang="${esc(c.lang)}">${esc(c.name)}</span><br>`:''}${esc(catalogueSetName(c.setName,c.setId,c.lang))}${setCode&&marketLanguage(c.lang)!=='en'?` · ${esc(setCode)}`:''}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${market}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
   const form=document.querySelector('#card-form');
   for(const name of ['gradingCompany','gradingGrade','manualAmount','manualNote','manualUrl'])if(Object.hasOwn(d,name)&&form.elements[name])form.elements[name].value=d[name];
   if(d.manualAmount)form.querySelector('.personal-fields')?.setAttribute('open','');
@@ -812,6 +859,16 @@ document.addEventListener('click',async event=>{
     }
     if(el.dataset.entry){const c=state.collection.find(c=>c.uid===el.dataset.entry);if(c)await openCard(c.id,c.lang,c);return;}
     if(el.dataset.wish){const c=state.wishlist.find(c=>c.uid===el.dataset.wish);if(c)await openCard(c.id,c.lang,null,c);return;}
+    if(el.dataset.edition){
+      const edition=groupCardEditions(searchResults,query).find(item=>item.key===el.dataset.edition);
+      if(edition)await openEdition(edition);
+      return;
+    }
+    if(el.dataset.editionLanguage){
+      const card=modalEdition?.printings.get(el.dataset.editionLanguage);
+      if(card)await openCard(card.id,card.lang,null,null,modalEdition);
+      return;
+    }
     if(el.dataset.card){await openCard(el.dataset.card,el.dataset.lang);return;}
     if(el.dataset.sealed){await openSealed(el.dataset.sealed);return;}
     if(el.dataset.set){await browseSet(el.dataset.set,el.dataset.lang);return;}
@@ -820,11 +877,6 @@ document.addEventListener('click',async event=>{
     if(el.dataset.range){range=el.dataset.range;render();return;}
     if(el.dataset.historyDays){await showPriceHistory(Number(el.dataset.historyDays));return;}
     if(el.dataset.search){await searchCatalogue(el.dataset.search);return;}
-    if(el.dataset.printingLanguage){
-      selectCatalogueLanguage(el.dataset.printingLanguage);
-      await searchCatalogue(query,{renderControls:true});
-      return;
-    }
     switch(el.dataset.action){
       case 'discover':navigate('catalog');break;
       case 'discover-sealed':navigate('sealed');break;
@@ -850,6 +902,7 @@ document.addEventListener('click',async event=>{
         }
         break;
       case 'close-modal':closeModal();break;
+      case 'edition-languages':if(modalEdition)await openEdition(modalEdition);break;
       case 'new-binder':newBinder();break;
       case 'toggle-modal-mode':captureCardDraft();modalMode=modalMode==='wish'?'collect':'wish';renderCardModal();break;
       case 'remove-card':removeCard();break;
@@ -866,8 +919,9 @@ document.addEventListener('click',async event=>{
       case 'browse-catalogue-sets':await browseCatalogueSets();break;
       case 'clear-search':await searchCatalogue('');break;
       case 'retry-search':if(listingSets)await browseCatalogueSets();else if(lastSetRequest)await browseSet(lastSetRequest.id,lastSetRequest.lang);else if(query)await runSearch();else{searchError='';render();}break;
-      case 'previous-page':if(searchPage>1){searchPage--;if(setView||listingSets)updateCatalog();else await runSearch();}break;
-      case 'next-page':searchPage++;if(setView||listingSets)updateCatalog();else await runSearch();break;
+      case 'previous-page':if(searchPage>1&&(setView||listingSets)){searchPage--;updateCatalog();}break;
+      case 'next-page':if(setView||listingSets){searchPage++;updateCatalog();}break;
+      case 'more-editions':if(query&&searchHasMore&&!loadingMoreEditions)await runSearch({append:true});break;
       case 'refresh':await refreshPrices();break;
       case 'refresh-card-price':await refreshCardPrice();break;
       case 'price-history':await showPriceHistory();break;
@@ -953,10 +1007,8 @@ document.addEventListener('change',event=>{
     updateSelection();
   }
   if(event.target.id==='catalog-lang'){
-    selectCatalogueLanguage(event.target.value);event.target.value=lang;
-    const term=catalogueQuery(document.querySelector('#catalog-query').value.trim(),lang).term;
-    if(!term&&listingSets&&lang!==ALL_PRINTINGS)void browseCatalogueSets();
-    else void searchCatalogue(term,{renderControls:true});
+    selectCatalogueLanguage(event.target.value);event.target.value=catalogueSetsLanguage;
+    void browseCatalogueSets();
   }
   if(event.target.id==='import-file'){readImport(event.target.files[0]);event.target.value='';}
 });

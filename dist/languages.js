@@ -1,14 +1,27 @@
-export const CATALOGUE_LANGUAGES = Object.freeze([
-  { code: 'en', label: 'English', example: 'Pikachu' },
-  { code: 'it', label: 'Italian', example: 'Pikachu' },
-  { code: 'ja', label: 'Japanese', example: 'Pikachu' },
-  { code: 'ko', label: 'Korean', example: 'Surskit' },
-  { code: 'zh-tw', label: 'Traditional Chinese', example: 'Pikachu' },
-  { code: 'zh-cn', label: 'Simplified Chinese', example: 'Exeggcute' },
-  { code: 'th', label: 'Thai', example: 'Cacnea' },
-  { code: 'id', label: 'Indonesian', example: 'Pikachu' },
-]);
-const ASIAN_LANGUAGES = new Set(CATALOGUE_LANGUAGES.slice(2).map(({code}) => code));
+const westernSearchLanguages = [
+  { code: 'en', label: 'English' },
+  { code: 'it', label: 'Italian' },
+];
+const asianLanguages = [
+  { code: 'ja', label: 'Japanese' },
+  { code: 'ko', label: 'Korean' },
+  { code: 'zh-tw', label: 'Traditional Chinese' },
+  { code: 'zh-cn', label: 'Simplified Chinese' },
+  { code: 'th', label: 'Thai' },
+  { code: 'id', label: 'Indonesian' },
+];
+const otherWesternLanguages = [
+  { code: 'es', label: 'Spanish' },
+  { code: 'fr', label: 'French' },
+  { code: 'de', label: 'German' },
+  { code: 'pt', label: 'Portuguese' },
+  { code: 'nl', label: 'Dutch' },
+  { code: 'pl', label: 'Polish' },
+  { code: 'ru', label: 'Russian' },
+];
+export const SEARCH_LANGUAGES = Object.freeze([...westernSearchLanguages, ...asianLanguages]);
+export const CATALOGUE_LANGUAGES = Object.freeze([...westernSearchLanguages, ...otherWesternLanguages, ...asianLanguages]);
+const ASIAN_LANGUAGES = new Set(asianLanguages.map(({code}) => code));
 
 function normalizedLanguage(code) {
   const language = typeof code === 'string' ? code.toLowerCase() : '';
