@@ -7,9 +7,19 @@ let fixtureId = 0;
 // dependency. The browser smoke separately checks that this output stays text.
 async function application(t, catalogueResponse = () => undefined) {
   const handlers = new Map(), nodes = new Map(), stored = new Map(), requests = [];
+  const timers = new Map();
+  let time = 0, nextTimer = 0;
+  const tick = elapsed => {
+    time += elapsed;
+    for (const [id, timer] of timers) {
+      if (timer.due > time) continue;
+      timers.delete(id);
+      timer.callback();
+    }
+  };
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, { innerHTML: '', value: '', open: false, classList: { add() {}, remove() {} },
-      addEventListener() {}, showModal() { this.open = true; }, close() { this.open = false; } });
+      addEventListener() {}, setAttribute() {}, showModal() { this.open = true; }, close() { this.open = false; } });
     return nodes.get(selector);
   };
   const location = { hash: '#catalog' };
@@ -22,10 +32,14 @@ async function application(t, catalogueResponse = () => undefined) {
       const path = String(url); requests.push(path);
       const cards = [{ id: 'base1-4', name: 'Synthetic card', localId: '4' }];
       const value = path === '/api/health' ? { configured: false } : path === './featured.json' ? []
-        : catalogueResponse(path) ?? (path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards);
+        : (await catalogueResponse(path)) ?? (path.includes('/sets/') ? { id: 'base1', name: 'Synthetic set', cards } : cards);
       return Response.json(value);
     },
-    setTimeout: () => 0,
+    setTimeout: (callback, delay) => {
+      timers.set(++nextTimer, { callback, due: time + delay });
+      return nextTimer;
+    },
+    clearTimeout: id => timers.delete(id),
   };
   for (const [name, value] of Object.entries(globals)) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, name);
@@ -42,7 +56,7 @@ async function application(t, catalogueResponse = () => undefined) {
     export const testState = () => ({ lang, query });
     export function renderLanguage(value) { lang=value; query='Synthetic'; searching=false; searchResults=[{id:'base1-4',name:'Synthetic'}]; render(); updateCatalog(); }
   `).toString('base64') + `#fixture-${fixtureId++}`);
-  return { app, handlers, node, stored, requests };
+  return { app, handlers, node, stored, requests, tick };
 }
 
 test('catalogue language DOM input is canonical before rendering or requesting data', async t => {
@@ -97,7 +111,7 @@ test('choosing Japanese keeps name search in view and opens the selected printin
   handlers.get('change')({ target: { id: 'catalog-lang', value: 'ja' } });
   assert.equal(app.testState().lang, 'ja');
   assert.match(node('#app').innerHTML, /Printing language/);
-  assert.match(node('#catalog-results').innerHTML, /Find Japanese printings/);
+  assert.match(node('#app').innerHTML, /Find Japanese printings/);
   assert.equal(requests.some(url => url.includes('/ja/sets')), false);
 
   node('#catalog-query').value = 'Charizard ex 151';
@@ -131,4 +145,89 @@ test('set browsing shows identifying codes when a Japanese title has no translat
   await handlers.get('click')({ target: { closest: () => ({ dataset: { set: 'SV7a', lang: 'ja' } }) } });
   assert.match(node('#app').innerHTML, /class="card-name">Card #060</);
   assert.match(node('#app').innerHTML, /lang="ja">ナイトストレッチャー/);
+});
+
+test('an Italian printing-language qualifier selects Korean and links to the official fallback', async t => {
+  const { app, handlers, node, stored, requests, tick } = await application(t, path => {
+    if (path.endsWith('/ko/sets')) return [{ id: 'SV2a', name: '포켓몬 카드 151' }];
+    if (path.includes('/ko/cards?')) return [];
+  });
+  const input = node('#catalog-query');
+  input.id = 'catalog-query';
+  input.value = 'Pikachu 151 in coreano';
+  handlers.get('input')({ target: input });
+  tick(300);
+  await new Promise(setImmediate);
+
+  assert.deepEqual(app.testState(), { lang: 'ko', query: 'Pikachu 151' });
+  assert.match(node('#app').innerHTML, /value="Pikachu 151 in coreano"/);
+  assert.equal(stored.get('pocketvault.lang'), 'ko');
+  const searches = requests.filter(url => url.includes('/ko/cards?')).map(url => new URL(url).searchParams);
+  assert.deepEqual(searches.map(params => params.get('set.id')), ['eq:SV2a', 'eq:SV2a']);
+  assert.equal(searches.at(-1).get('name'), '피카츄');
+
+  const results = node('#catalog-results').innerHTML;
+  assert.match(results, /Search the official Pokémon Korea catalogue/);
+  const link = new URL(results.match(/href="([^"]+)"/)[1]);
+  assert.equal(link.origin, 'https://pokemoncard.co.kr');
+  assert.equal(link.searchParams.get('s'), '피카츄');
+});
+
+test('catalogue typing debounces requests, waits for a composed name, and clears results immediately', async t => {
+  const { app, handlers, node, requests, tick } = await application(t);
+  const input = node('#catalog-query');
+  input.id = 'catalog-query';
+  const type = (value, isComposing = false) => {
+    input.value = value;
+    handlers.get('input')({ target: input, isComposing });
+  };
+  const searches = () => requests.filter(url => url.includes('/cards?'));
+
+  type('P');
+  assert.match(node('#catalog-results').innerHTML, /Keep typing/);
+  type('Pi');
+  tick(200);
+  type('Pik');
+  tick(299);
+  assert.equal(searches().length, 0);
+  tick(1);
+  await new Promise(setImmediate);
+  assert.deepEqual(searches().map(url => new URL(url).searchParams.get('name')), ['Pik']);
+  assert.match(node('#catalog-results').innerHTML, /Results for “Pik”/);
+
+  type('ピカチュウ', true);
+  tick(300);
+  assert.equal(searches().length, 1);
+  handlers.get('compositionend')({ target: input });
+  tick(300);
+  await new Promise(setImmediate);
+  assert.equal(new URL(searches()[1]).searchParams.get('name'), 'ピカチュウ');
+
+  type('');
+  assert.equal(app.testState().query, '');
+  assert.doesNotMatch(node('#catalog-results').innerHTML, /Results for “ピカチュウ”/);
+});
+
+test('an older catalogue response is ignored while a new search waits for its pause', async t => {
+  const earlier = Promise.withResolvers();
+  const { handlers, node, requests, tick } = await application(t, url => {
+    if (new URL(url).searchParams.get('name') === 'Char') return earlier.promise;
+  });
+  const input = node('#catalog-query');
+  input.id = 'catalog-query';
+  input.value = 'Char';
+  handlers.get('input')({ target: input });
+  tick(300);
+
+  input.value = 'Pika';
+  handlers.get('input')({ target: input });
+  earlier.resolve([{ id: 'old-4', name: 'Earlier result', localId: '4' }]);
+  await new Promise(setImmediate);
+  assert.doesNotMatch(node('#catalog-results').innerHTML, /Earlier result/);
+
+  handlers.get('submit')({ target: { id: 'catalog-form' }, preventDefault() {} });
+  await new Promise(setImmediate);
+  assert.match(node('#catalog-results').innerHTML, /Results for “Pika”/);
+  tick(300);
+  assert.equal(requests.filter(url => url.includes('name=Pika')).length, 1);
 });
