@@ -1,5 +1,5 @@
 const cachePrefix = 'monstertrade-static-';
-const cacheName = `${cachePrefix}v2`;
+const cacheName = `${cachePrefix}v3`;
 const scope = self.registration.scope;
 const launchURL = new URL(scope);
 const indexURL = new URL('index.html', scope);

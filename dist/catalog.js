@@ -1,12 +1,17 @@
 /** TCGdex public catalogue. Market estimates are Cardmarket trends in EUR. */
 import { providerMarketComparison } from './pricing.js';
-import { catalogueAlias, pokemonNameForIds, printedSearchName } from './pokemon-search.js';
+import { CATALOGUE_LANGUAGES } from './languages.js';
+import { catalogueAlias, pokemonNameForIds, printedSearchName, westernSearchTitle } from './pokemon-search.js';
 
 const API = 'https://api.tcgdex.net/v2';
 const TIMEOUT_MS = 12_000;
 const CACHE_LIMIT = 180;
 const cache = new Map();
 const pending = new Map();
+export const CATALOGUE_PAGE_SIZE = 24;
+const PRINTINGS_PER_LANGUAGE = Math.floor(CATALOGUE_PAGE_SIZE / CATALOGUE_LANGUAGES.length);
+const catalogueId = /^[a-z0-9.+]+(?:-[a-z0-9.+]+)*-\d+[a-z]?$/i;
+class CatalogueNotFound extends Error {}
 
 export const FEATURED_IDS = Object.freeze([
   'swsh7-215', 'sv08-238', 'sv03.5-199',
@@ -49,7 +54,7 @@ async function request(path, { force = false, ttl = 3_600_000 } = {}) {
     try {
       const response = await fetch(url, { signal: controller.signal, credentials: 'omit' });
       if (!response.ok) {
-        if (response.status === 404) throw new Error('This card or set is not available in the selected language. Check its catalogue ID.');
+        if (response.status === 404) throw new CatalogueNotFound('This card or set is not available in the selected language. Check its catalogue ID.');
         if (response.status === 429) throw new Error('The card catalogue is busy. Wait a moment before searching or refreshing again.');
         throw new Error(`The card catalogue is unavailable (HTTP ${response.status}). Please try again later.`);
       }
@@ -131,8 +136,8 @@ export function normalizeCard(raw, lang = 'en') {
   };
 }
 
-async function cardList(filters, lang, page, pokemonName = '') {
-  const params = new URLSearchParams({ ...filters, 'pagination:page': String(page), 'pagination:itemsPerPage': '24' });
+async function cardList(filters, lang, page, pageSize, pokemonName = '') {
+  const params = new URLSearchParams({ ...filters, 'pagination:page': String(page), 'pagination:itemsPerPage': String(pageSize) });
   const data = await request(`${lang}/cards?${params}`, { ttl: 600_000 });
   if (!Array.isArray(data)) throw new Error('The catalogue could not return search results. Please try again.');
   return data.filter(card => card && typeof card.id === 'string' && typeof card.name === 'string').map(card => {
@@ -144,15 +149,17 @@ async function cardList(filters, lang, page, pokemonName = '') {
   });
 }
 
-export async function searchCards(query, lang = 'en', page = 1) {
+export async function searchCards(query, lang = 'en', page = 1, pageSize = CATALOGUE_PAGE_SIZE) {
   const term = String(query ?? '').trim().slice(0, 100);
   if (!term) return [];
   const pageNumber = Number(page);
   if (!Number.isInteger(pageNumber) || pageNumber < 1) throw new Error('Choose a valid catalogue page.');
   lang = language(lang);
-  if (/^[a-z0-9.+]+(?:-[a-z0-9.+]+)*-\d+[a-z]?$/i.test(term)) return pageNumber === 1 ? [await getCard(term, lang)] : [];
+  if (catalogueId.test(term)) return pageNumber === 1 ? [await getCard(term, lang)] : [];
+  const westernSet = (lang === 'en' || lang === 'it') && term.match(/^(.+?)\s+(?:Pok[eé]mon(?:\s+Card)?\s+)?151$/i);
+  if (westernSet) return cardList({ name: westernSearchTitle(westernSet[1], lang), 'set.id': 'eq:sv03.5' }, lang, pageNumber, pageSize);
   const pokemon = catalogueAlias(term, lang);
-  if (!pokemon) return cardList({ name: term }, lang, pageNumber);
+  if (!pokemon) return cardList({ name: westernSearchTitle(term, lang) }, lang, pageNumber, pageSize);
 
   const filters = {};
   if (pokemon.setCode) {
@@ -165,23 +172,59 @@ export async function searchCards(query, lang = 'en', page = 1) {
     const exactEx = (lang === 'ja' || lang === 'ko') && pokemon.suffix.toUpperCase() === 'EX';
     const names = pokemon.nativeNames.map(nativeName => printedSearchName({ nativeName, suffix: pokemon.suffix }, lang));
     if (pokemon.suffix && lang !== 'ja' && lang !== 'ko') filters.suffix = `eq:${pokemon.suffix.toUpperCase()}`;
-    return cardList({ ...filters, name: `${exactEx ? 'eq:' : 'like:'}${names.join('|')}` }, lang, pageNumber);
+    return cardList({ ...filters, name: `${exactEx ? 'eq:' : 'like:'}${names.join('|')}` }, lang, pageNumber, pageSize);
   }
   const printedName = printedSearchName(pokemon, lang);
-  if (!pokemon.id) return cardList({ ...filters, name: printedName }, lang, pageNumber);
+  if (!pokemon.id) return cardList({ ...filters, name: printedName }, lang, pageNumber, pageSize);
   const suffix = pokemon.suffix.toUpperCase();
   if ((lang === 'ja' || lang === 'ko') && suffix === 'EX' && pokemon.nativeName) {
     // TCGdex groups ex and EX under the same suffix. The printed title distinguishes those eras.
-    return cardList({ ...filters, name: `eq:${printedName}` }, lang, pageNumber, pokemon.name);
+    return cardList({ ...filters, name: `eq:${printedName}` }, lang, pageNumber, pageSize, pokemon.name);
   }
   if (suffix) filters.suffix = `eq:${suffix}`;
   const dexFilters = { ...filters, dexId: `eq:${pokemon.id}` };
-  if (!pokemon.nativeName) return cardList(dexFilters, lang, pageNumber, pokemon.name);
+  if (!pokemon.nativeName) return cardList(dexFilters, lang, pageNumber, pageSize, pokemon.name);
 
   // Base the fallback on page one so all pages use the same query strategy.
-  const first = await cardList(dexFilters, lang, 1, pokemon.name);
-  if (first.length) return pageNumber === 1 ? first : cardList(dexFilters, lang, pageNumber, pokemon.name);
-  return cardList({ ...filters, name: printedName }, lang, pageNumber, pokemon.name);
+  const first = await cardList(dexFilters, lang, 1, pageSize, pokemon.name);
+  if (first.length) return pageNumber === 1 ? first : cardList(dexFilters, lang, pageNumber, pageSize, pokemon.name);
+  return cardList({ ...filters, name: printedName }, lang, pageNumber, pageSize, pokemon.name);
+}
+
+export async function searchCardPrintings(query, page, onFirstResults) {
+  const term = String(query ?? '').trim().slice(0, 100);
+  const exact = catalogueId.test(term);
+  const batches = CATALOGUE_LANGUAGES.map(({code}) => ({ code, cards: [] }));
+  let previewShown = false;
+  await Promise.all(batches.map(async batch => {
+    try {
+      batch.cards = (await searchCards(term, batch.code, page, PRINTINGS_PER_LANGUAGE)).slice(0, PRINTINGS_PER_LANGUAGE);
+    } catch (error) {
+      if (!(exact && error instanceof CatalogueNotFound)) batch.error = error;
+    }
+    if (batch.cards.length && !previewShown && onFirstResults) {
+      previewShown = true;
+      onFirstResults(batch.cards);
+    }
+  }));
+  if (batches.every(batch => batch.error)) throw batches[0].error;
+  // Interleave results so that a common printing language cannot fill the page.
+  const cards = [], seen = new Set();
+  for (let i = 0; i < PRINTINGS_PER_LANGUAGE; i++) {
+    for (const {code, cards: rows} of batches) {
+      const card = rows[i];
+      const key = card && `${code}:${card.id.toLowerCase()}`;
+      if (card && !seen.has(key)) {
+        seen.add(key);
+        cards.push(card);
+      }
+    }
+  }
+  return {
+    cards,
+    hasMore: !exact && batches.some(batch => batch.cards.length === PRINTINGS_PER_LANGUAGE),
+    unavailable: batches.filter(batch => batch.error).map(batch => batch.code),
+  };
 }
 
 export async function getCard(id, lang = 'en', force = false) {

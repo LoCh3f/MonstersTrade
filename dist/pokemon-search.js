@@ -89,6 +89,21 @@ export function catalogueQuery(term, lang) {
   return { term: match[1], lang: printing.startsWith('giappones') || printing === 'japanese' ? 'ja' : 'ko' };
 }
 
+export function westernSearchTitle(term, lang) {
+  if (lang !== 'en' && lang !== 'it') return term;
+  const key = nameKey(term);
+  const title = localizedCardNames.find(names => names.some(name => nameKey(name) === key));
+  if (title) return title[lang === 'it' ? 1 : 0];
+  const suffix = term.match(searchSuffix);
+  const species = speciesNames[findSpecies(term) ?? (suffix ? findSpecies(term.slice(0, suffix.index)) : null)];
+  if (!species) return term;
+  // Only translate complete names. Partial searches still match the typed text.
+  const name = nameKey(suffix ? term.slice(0, suffix.index) : term);
+  if (![species[0], species[5], species[6]].some(value => value && nameKey(value) === name)) return term;
+  const printed = species[lang === 'it' ? 6 : 0] || species[0];
+  return suffix ? `${printed}${lang === 'it' && suffix[1] === 'ex' ? '-' : ' '}${suffix[1]}` : printed;
+}
+
 export function catalogueAlias(term, lang) {
   if (marketLanguage(lang) === 'en') return null;
   let input = term;
