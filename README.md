@@ -118,8 +118,8 @@ A failed deployment or post-deployment health check needs investigation before r
 
 ## Features
 
-- Search by name or catalogue card ID and browse sets in English, Italian, Japanese, Korean, Traditional Chinese, Simplified Chinese, Thai, and Indonesian. Card details and images vary by language and depend on [TCGdex coverage](https://tcgdex.dev/status).
-- The card catalogue starts searching all supported languages after two characters and a short pause. Results show the printing language. Use the optional language filter or type `Charizard ex 151 giapponese` or `Manoferrea-ex coreano` to narrow a search. Asian catalogues recognize English, Italian, and romanized Japanese Pokémon names, along with partial names such as `Char` and selected Trainer and Basic Energy aliases such as `Caram`. If TCGdex has no Korean results, open the official Pokémon Korea catalogue from the Korean results page.
+- Search by name or catalogue card ID and browse sets in English, Italian, Japanese, Korean, Traditional Chinese, Simplified Chinese, Thai, and Indonesian. Card details and images vary by language and catalogue.
+- The card catalogue starts searching all supported languages after two characters and a short pause. Result buttons identify the languages found and let you narrow the same query. Asian catalogues recognize English, Italian, and romanized Japanese Pokémon names, along with partial names and selected Trainer and Basic Energy aliases. Thai and Simplified Chinese name searches use a regional snapshot. Korean, Traditional Chinese and Indonesian use it when TCGdex returns no matching printings or is unavailable.
 - Search sealed products by name, set and type: booster packs, booster boxes, Elite Trainer Boxes, collections, tins, blisters and bundles. Track quantities as whole sealed products, with per-product costs and packaging condition. Filter cards and sealed holdings separately in the collection.
 - Add custom sealed products with edition, language, product code and source link. Record dated personal valuations and review their local history, including multiple observations on the same day.
 - Record the exact catalogue variant where available, including finishes and special prints. Different variants, grading records, and personal valuation evidence remain separate entries.
@@ -132,11 +132,15 @@ A failed deployment or post-deployment health check needs investigation before r
 - Save wishlist targets and track set progress by language and distinct card IDs.
 - Export collection rows to CSV or the complete local state to JSON. CSV merges rows; JSON restore replaces local collection, wishlist, binders, and aggregate history after a preview. Imports and removals offer a temporary undo action until another change is saved.
 
+## Regional catalogue data
+
+The supplementary printing catalogue uses regional card and set metadata adapted from the November 26, 2026 [CardCorpus snapshot](https://github.com/cardcorpus/pokemon-card-dataset/tree/ee2eb604dd80b33eddbdb7a300022e2f3d6e36f8/v1) under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). It includes names, set and card numbers, rarity, and external artwork references. Its entries can be saved with a personal valuation. To rebuild the compact assets, run `node scripts/build-regional-catalogues.mjs /path/to/cardcorpus/v1` against a reviewed snapshot and update the pin and attribution together.
+
 ## How prices are handled
 
 With authorized CardTrader market access, the four reviewed 30th Celebration singles (#135, #142, #148 and #153) use the lowest in-stock EUR offer for the saved Italian or English copy's condition and reviewed printing. The same observation can price different conditions separately. Shipping is excluded. A successful check with no matching offers leaves that selection unpriced. Marketplace offers reflect asking prices. The Cardmarket trend remains visible in the card details with its own history. See [CardTrader marketplace API](https://www.cardtrader.com/en-US/docs/api/full/reference#marketplace-products).
 
-Card metadata and artwork come from [TCGdex](https://tcgdex.dev/). The price service uses canonical English records for the Western catalogue and the selected Asian catalogue for Asian editions. Cache and history entries are scoped by Asian catalogue language, even when two languages share a TCGdex card ID. A Cardmarket product can aggregate several languages. Asian cards use a personal valuation for the collection total and keep the marketplace figures visible for comparison. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
+The public price service uses [TCGdex](https://tcgdex.dev/). It uses canonical English records for the Western catalogue and the selected Asian catalogue for Asian editions. Cache and history entries are scoped by Asian catalogue language, even when two languages share a TCGdex card ID. A Cardmarket product can aggregate several languages. Asian cards use a personal valuation for the collection total and keep available marketplace figures visible for comparison. See [TCGdex pricing](https://tcgdex.dev/markets-prices) and [coverage limitations](https://tcgdex.dev/faq).
 
 When provided, the detail view shows Cardmarket's marketplace low and 7- and 30-day averages in EUR, alongside TCGplayer market benchmarks by finish in USD. The EUR trend is the public history series. USD benchmarks and the additional EUR metrics are displayed in the detail view and do not contribute to collection totals.
 
