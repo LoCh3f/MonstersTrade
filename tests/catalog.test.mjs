@@ -153,6 +153,7 @@ test('direct card ID search stays in the selected catalogue and preserves the re
 test('combined card-ID search keeps distinct language printings and ignores catalogue misses', async t => {
   const { searchCardPrintings } = await freshCatalog();
   t.mock.method(globalThis, 'fetch', async url => {
+    if (url.startsWith('./catalogues/')) return response({sets:[],cards:[]});
     const path = new URL(url).pathname;
     if (path.includes('/zh-cn/')) return new Response(null, {status: 503});
     if (!/\/(en|it)\/cards\//.test(path)) return new Response(null, {status: 404});
@@ -237,7 +238,9 @@ test('localized name fallback keeps its pagination when Pokédex metadata is inc
   assert.equal(urls[0].get('dexId'), 'eq:283');
   assert.equal(urls[0].get('pagination:page'), '1');
   assert.equal(urls[1].get('name'), '비구술');
-  assert.equal(urls[1].get('pagination:page'), '2');
+  assert.equal(urls[1].get('pagination:page'), '1');
+  assert.equal(urls[2].get('name'), '비구술');
+  assert.equal(urls[2].get('pagination:page'), '2');
 });
 
 test('verified Italian Trainer names search Japanese printings without changing the original title', async t => {
@@ -293,6 +296,7 @@ test('partial Asian searches combine matching species and translate Trainer name
   const { searchCards } = await freshCatalog();
   const requests = [];
   t.mock.method(globalThis, 'fetch', async url => {
+    if (url.startsWith('./catalogues/')) return response({sets:[],cards:[]});
     const request = new URL(url);
     requests.push(request);
     if (request.pathname === '/v2/ja/sets') return response([{ id: 'SV2a', name: 'ポケモンカード151' }]);

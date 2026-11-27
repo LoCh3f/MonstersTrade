@@ -130,6 +130,7 @@ dialog:not(.modal-small){width:min(860px,calc(100vw - 32px))}.modal-columns{grid
 
 .card-native, .card-print { color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 3px; overflow-wrap: anywhere; }
 .printing-language { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.catalogue-languages { margin-bottom: 14px; }
 #catalog-examples[hidden] { display: none; }
 @media(max-width: 620px) {
   #catalog-form .printing-language span { display: none; }

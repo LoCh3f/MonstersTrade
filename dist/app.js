@@ -10,6 +10,7 @@ import { sealedFields, sealedPricePanel, sealedValuationHistory, sealedPublicHis
 import { productImage, productPhotoSource, safePhotoURL } from './photos.js';
 import { isInstalled, promptInstallation, setupInstallation } from './install.js';
 import { cardOfferKey, cardOfferReference } from './card-offers.js';
+import { isRegionalIdentity } from './regional-catalogue.js';
 
 const icons = {
   home:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -175,7 +176,7 @@ function render() {
       <main id="main" class="main" tabindex="-1">
         ${storageWarning?`<div class="notice warning">${esc(storageWarning)} <button class="text-button" data-page="settings">Manage backups</button></div>`:''}
         ${renderPage()}
-        <footer class="footer"><span>Monstertrade</span><span>Card data &amp; market references by <a href="https://tcgdex.dev" target="_blank" rel="noopener noreferrer">TCGdex</a> · Independent fan project</span><div>${sealedAttribution()}<p class="photo-source">Pokémon species names: <a href="./POKEAPI-LICENSE.txt">PokéAPI</a>. Card images: TCGdex. Sealed catalogue images: TCGplayer. Images are reference illustrations; check language and edition.</p></div></footer>
+        <footer class="footer"><span>Monstertrade</span><span>Card data &amp; market references by <a href="https://tcgdex.dev" target="_blank" rel="noopener noreferrer">TCGdex</a> · Independent fan project</span><div>${sealedAttribution()}<p class="photo-source">Pokémon species names: <a href="./POKEAPI-LICENSE.txt">PokéAPI</a>. Regional catalogue data: <a href="https://github.com/cardcorpus/pokemon-card-dataset" target="_blank" rel="noopener noreferrer">CardCorpus</a> · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>. Card images: TCGdex and CardCorpus. Sealed catalogue images: TCGplayer. Images are reference illustrations; check language and edition.</p></div></footer>
       </main>
     </div>
     <nav class="mobile-nav" aria-label="Mobile navigation">
@@ -234,7 +235,7 @@ function cardTile(card, type = 'catalog') {
   const title=catalogueCardTitle(card);
   const asian=marketLanguage(card.lang)!=='en';
   const number=card.localId?`#${card.localId}`:'';
-  const printing=asian?[card.setId,number].filter(Boolean).join(' · '):'';
+  const printing=asian?[isRegionalIdentity(card.id,card.lang)?card.setCode:card.setId,number].filter(Boolean).join(' · '):'';
   const setName=cardSetTitle(card)||(printing?'':card.setId||'Pokémon TCG');
   const printingLabel=[printing,type==='catalog'?languageLabel(cardLanguage):''].filter(Boolean).join(' · ');
   const accessibleTitle=[title,printing||(type==='catalog'?number:''),type==='catalog'?languageLabel(cardLanguage):''].filter(Boolean).join(' · ');
@@ -401,13 +402,17 @@ function catalogResults() {
       const alias=catalogueAlias(query,language);
       const url=new URL('https://pokemoncard.co.kr/cards');
       if(alias?.nativeName)url.searchParams.set('s',printedSearchName(alias,language));
-      return empty('search','No cards found',`TCGdex covers only some Korean printings. <a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">Search the official Pokémon Korea catalogue</a>.`,'','');
+      return empty('search','No cards found',`<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer">Search the official Pokémon Korea catalogue</a> for more printings.`,'','');
     }
     return availability+empty('search','No cards found','Try the full Pokémon name or a card ID, or open the set to see the available prints.','Browse sets','browse-catalogue-sets')+pagination;
   }
   const display=setView?rows.slice((searchPage-1)*CATALOGUE_PAGE_SIZE,searchPage*CATALOGUE_PAGE_SIZE):rows;
   const scope=language===ALL_PRINTINGS?'All languages':language.toUpperCase();
-  return `${availability}<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,language))}`:`Results for “${esc(query)}” · ${esc(scope)}`}</span>${finishingLanguages?'<span role="status">Checking more languages…</span>':''}</div><div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${usingFeatured?'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>':finishingLanguages?'':cataloguePagination(setView?searchPage*CATALOGUE_PAGE_SIZE>=rows.length:!searchHasMore)}`;
+  const availableLanguages=query&&language===ALL_PRINTINGS&&!finishingLanguages
+    ? [...new Set(display.map(card=>card.lang))] : [];
+  const languageLinks=availableLanguages.length
+    ? `<div class="chips catalogue-languages" role="group" aria-label="Printing languages in these results">${availableLanguages.map(code=>`<button class="chip" data-printing-language="${esc(code)}">${esc(languageLabel(code))}</button>`).join('')}</div>` : '';
+  return `${availability}<div class="result-note"><span>${usingFeatured?'Collector favorites · English cards':setView?`${num(rows.length)} cards in ${esc(catalogueSetName(setView.name,setView.id,language))}`:`Results for “${esc(query)}” · ${esc(scope)}`}</span>${finishingLanguages?'<span role="status">Checking more languages…</span>':''}</div>${languageLinks}<div class="card-grid collection-grid">${display.map(c=>cardTile(c)).join('')}</div>${usingFeatured?'<p class="card-footer-note">Featured snapshot dates are shown in card details.</p>':finishingLanguages?'':cataloguePagination(setView?searchPage*CATALOGUE_PAGE_SIZE>=rows.length:!searchHasMore)}`;
 }
 function cataloguePagination(lastPage) {
   return `<div class="pagination"><button class="button subtle small-button" data-action="previous-page" ${searchPage===1?'disabled':''}>Previous</button><span>Page ${searchPage}</span><button class="button subtle small-button" data-action="next-page" ${lastPage?'disabled':''}>Next</button></div>`;
@@ -537,7 +542,11 @@ async function openCard(id,language=catalogueSetLanguage(lang),entry=null,wish=n
   const ticket=++modalTicket;++modalHistoryTicket;
   modalCard=null;modalBundle=null;modalWarning='';modalDraft=null;modalEntry=entry;modalWish=wish;modalMode=wish?'wish':'collect';
   modalShell('Card details','<div class="loading"><span class="spinner"></span>Loading card and price references…</div>');
-  const [details,prices]=await Promise.allSettled([entry||wish?Promise.resolve(structuredClone(entry||wish)):getCard(id,language),getPrices(id,{lang:language})]);
+  const regional=isRegionalIdentity(id,language);
+  const [details,prices]=await Promise.allSettled([
+    entry||wish?Promise.resolve(structuredClone(entry||wish)):getCard(id,language),
+    regional?null:getPrices(id,{lang:language}),
+  ]);
   if(ticket!==modalTicket||!modal.open)return;
   if(details.status==='fulfilled'){
     const card=details.value;
@@ -549,8 +558,9 @@ async function openCard(id,language=catalogueSetLanguage(lang),entry=null,wish=n
     if(!saved){modalShell('Couldn’t load this card',`<p class="muted">${esc(details.reason.message)}</p><div class="modal-actions">${button('Close','close-modal',null,'subtle')}</div>`);return;}
     modalCard=ensureMarket(saved);modalWarning='Showing bundled card details. '+details.reason.message;
   }
-  if(prices.status==='fulfilled'){modalBundle=prices.value;modalCard=applyMarketUpdate(modalCard,modalBundle);}
-  else{modalWarning=[modalWarning,prices.reason.message].filter(Boolean).join(' ');modalCard=priceFailure(modalCard,prices.reason.message);}
+  if(prices.status==='fulfilled'){
+    if(prices.value){modalBundle=prices.value;modalCard=applyMarketUpdate(modalCard,modalBundle);}
+  }else{modalWarning=[modalWarning,prices.reason.message].filter(Boolean).join(' ');modalCard=priceFailure(modalCard,prices.reason.message);}
   renderCardModal();
 }
 async function openSealed(id=null,entry=null,wish=null) {
@@ -649,7 +659,12 @@ function renderCardModal() {
   const c=modalCard;if(!c)return;
   const title=catalogueCardTitle(c);
   const e=modalEntry,w=modalWish,d=modalDraft||{},wishMode=modalMode==='wish';
-  modalShell(title,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(title)}"></a>`:icon('cards')}<p class="modal-card-meta">${title!==c.name?`<span lang="${esc(c.lang)}">${esc(c.name)}</span><br>`:''}${esc(catalogueSetName(c.setName,c.setId,c.lang))}${c.setId&&marketLanguage(c.lang)!=='en'?` · ${esc(c.setId)}`:''}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${marketPanel({...c,condition:wishMode?'Near Mint':d.condition||c.condition},modalBundle)}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
+  const regional=isRegionalIdentity(c.id,c.lang);
+  const setCode=regional?c.setCode:c.setId;
+  const market=regional
+    ? '<p class="notice">This regional printing can be saved with a personal valuation.</p>'
+    : marketPanel({...c,condition:wishMode?'Near Mint':d.condition||c.condition},modalBundle);
+  modalShell(title,`${modalWarning?`<div class="notice warning">${esc(modalWarning)}</div>`:''}<div class="modal-columns"><div class="modal-art-column">${imageURL(c)?`<a href="${esc(imageURL(c,true))}" target="_blank" rel="noopener noreferrer" aria-label="Open full-size card image"><img class="modal-image" src="${esc(imageURL(c,true))}" alt="${esc(title)}"></a>`:icon('cards')}<p class="modal-card-meta">${title!==c.name?`<span lang="${esc(c.lang)}">${esc(c.name)}</span><br>`:''}${esc(catalogueSetName(c.setName,c.setId,c.lang))}${setCode&&marketLanguage(c.lang)!=='en'?` · ${esc(setCode)}`:''}<br>#${esc(c.localId)} · ${esc(languageLabel(c.lang))}<br>${esc(c.rarity)}</p></div><div><div id="market-panel">${market}</div><form id="card-form">${variantFields(c)}${wishMode?`<div class="form-field"><label for="target-price">Your target price (€)</label><input id="target-price" name="target" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.target??w?.target??c.price??0)}" required></div><p class="form-hint">${marketLanguage(c.lang)==='en'?'Targets use current market references.':'This target is saved for reference until a language-specific market quote is available.'}</p>`:`<div class="form-row"><div class="form-field"><label for="card-quantity">Quantity</label><input id="card-quantity" name="quantity" type="number" min="1" max="1000000" step="1" value="${esc(d.quantity??e?.quantity??1)}" required></div><div class="form-field"><label for="card-cost">Cost per card (€)</label><input id="card-cost" name="cost" type="number" min="0" max="1000000000" step="0.01" value="${esc(d.cost??(e?.cost!==undefined?Number(e.cost.toFixed(2)):0))}" ${d.costEdited?'data-edited="true"':''} required></div></div><div class="form-row"><div class="form-field"><label for="card-condition">Condition</label><select id="card-condition" name="condition">${CONDITIONS.map(condition=>`<option ${condition===(d.condition??e?.condition??'Near Mint')?'selected':''}>${condition}</option>`).join('')}</select></div><div class="form-field"><label for="card-binder">Binder</label><select id="card-binder" name="binderId">${state.binders.map(b=>`<option value="${esc(b.id)}" ${b.id===(d.binderId??e?.binderId??state.binders[0].id)?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div></div><p class="form-hint">Purchase cost is per card and stays separate from its valuation.</p>${personalFields(c)}`}<div id="form-error" class="form-error" role="alert"></div><div class="modal-actions"><button class="button primary" type="submit">${icon(wishMode?'heart':'plus')}${wishMode?w?'Save target':'Save to wishlist':e?'Save changes':'Add to collection'}</button></div></form><div class="modal-subtle"><button data-action="toggle-modal-mode">${wishMode?'Add to collection instead':'Save to wishlist instead'}</button>${(wishMode&&w)||(!wishMode&&e)?'<button data-action="remove-card">Remove</button>':''}</div></div></div>`);
   const form=document.querySelector('#card-form');
   for(const name of ['gradingCompany','gradingGrade','manualAmount','manualNote','manualUrl'])if(Object.hasOwn(d,name)&&form.elements[name])form.elements[name].value=d[name];
   if(d.manualAmount)form.querySelector('.personal-fields')?.setAttribute('open','');
@@ -753,11 +768,12 @@ async function readImport(file) {
   }catch(error){if(controller.signal.aborted)return;pendingImport=null;modalShell('This file couldn’t be imported',`<p class="muted">${esc(error.message)}</p><div class="modal-actions">${button('Choose another file','choose-file','upload','primary')}</div>`,true);}
   finally{if(activeImport===controller)activeImport=null;}
 }
+const hasSharedPrice=card=>card.kind==='sealed'?/^sealed-tcgp-[1-9]\d*-eu$/.test(card.id):!isRegionalIdentity(card.id,card.lang);
 let refreshCursor=0;
 async function refreshPrices({automatic=false}={}) {
   if(refreshing)return;
   if(recoveredRaw||migrationPending){if(!automatic)toast('Back up and resolve the saved-data warning before refreshing.');return;}
-  const eligible=[...state.collection,...state.wishlist].filter(c=>c.kind!=='sealed'||/^sealed-tcgp-[1-9]\d*-eu$/.test(c.id));
+  const eligible=[...state.collection,...state.wishlist].filter(hasSharedPrice);
   const keyFor=c=>c.kind==='sealed'?`sealed:${c.id}`:`card:${cardOfferKey(c.id,c.lang)||marketCardKey(c.id,marketLanguage(c.lang))}`;
   const identities=new Map(eligible.map(c=>[keyFor(c),{id:c.id,kind:c.kind||'card',lang:c.lang}]));
   const all=[...identities.keys()];
@@ -778,7 +794,7 @@ async function refreshPrices({automatic=false}={}) {
 }
 function maybeRefreshPrices() {
   if(document.visibilityState!=='visible'||modal.open||refreshing||recoveredRaw||migrationPending||Date.now()-lastAutoRefresh<3_600_000)return;
-  const due=[...state.collection,...state.wishlist].filter(c=>c.kind!=='sealed'||/^sealed-tcgp-[1-9]\d*-eu$/.test(c.id)).some(c=>!c.market?.fetchedAt||Date.now()-Date.parse(c.market.fetchedAt)>86_400_000||Boolean(c.market.lastError));
+  const due=[...state.collection,...state.wishlist].filter(hasSharedPrice).some(c=>!c.market?.fetchedAt||Date.now()-Date.parse(c.market.fetchedAt)>86_400_000||Boolean(c.market.lastError));
   if(due)void refreshPrices({automatic:true});
 }
 
@@ -804,6 +820,11 @@ document.addEventListener('click',async event=>{
     if(el.dataset.range){range=el.dataset.range;render();return;}
     if(el.dataset.historyDays){await showPriceHistory(Number(el.dataset.historyDays));return;}
     if(el.dataset.search){await searchCatalogue(el.dataset.search);return;}
+    if(el.dataset.printingLanguage){
+      selectCatalogueLanguage(el.dataset.printingLanguage);
+      await searchCatalogue(query,{renderControls:true});
+      return;
+    }
     switch(el.dataset.action){
       case 'discover':navigate('catalog');break;
       case 'discover-sealed':navigate('sealed');break;
